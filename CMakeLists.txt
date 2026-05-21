@@ -161,15 +161,20 @@ endif()
 # Consensus Harness Library (imported from luxfi/consensus/pkg/cpp/)
 # =============================================================================
 #
-# E2E test harness (ZeroMQ peer transport + MLX consensus). Imported from
-# luxfi/consensus/pkg/cpp where it was built with its own CMakeLists +
-# include layout. Header paths and C++20 std::span usage need a port pass
-# before it will build cleanly here — opt-in via -DLUX_CONSENSUS_BUILD_HARNESS=ON
-# once that work is done.
+# E2E test/bench harness, NOT a production transport. Pulls in ZeroMQ
+# (libzmq3-dev) via src/network.cpp — production node-to-node transport
+# is ZAP (github.com/luxfi/zap), not ZMQ. This harness exists only for
+# the C++ e2e-test scaffold under luxfi/consensus/test/e2e/.
+#
+# Header paths still reference flat names (lux_consensus.h vs the luxcpp
+# nested lux/consensus.hpp); also uses C++20 std::span. Needs a port pass
+# before it will build cleanly here — opt-in once that work is done.
 
-option(LUX_CONSENSUS_BUILD_HARNESS "Build imported consensus harness (needs include-path port)" OFF)
+option(LUX_CONSENSUS_BUILD_ZMQ_HARNESS
+    "Build imported ZMQ-based consensus test harness (NOT for production; ZAP is canonical)"
+    OFF)
 
-if(LUX_CONSENSUS_BUILD_HARNESS)
+if(LUX_CONSENSUS_BUILD_ZMQ_HARNESS)
     set(_harness_present TRUE)
     foreach(_src ${CONSENSUS_HARNESS_SOURCES})
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
