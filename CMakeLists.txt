@@ -92,96 +92,107 @@ set(CONSENSUS_HEADERS
 )
 
 # =============================================================================
-# Consensus GPU Library
+# Consensus GPU Library — builds only if planned source files exist
 # =============================================================================
 
-add_library(luxconsensus_gpu SHARED ${CONSENSUS_SOURCES})
-
-target_include_directories(luxconsensus_gpu PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-    PRIVATE
-    ${LUX_GPU_INCLUDE}
-)
-
-if(LUX_CRYPTO_INCLUDE)
-    target_include_directories(luxconsensus_gpu PRIVATE ${LUX_CRYPTO_INCLUDE})
-endif()
-
-target_compile_definitions(luxconsensus_gpu PRIVATE
-    LUX_CONSENSUS_GPU_BUILD
-)
-
-set_target_properties(luxconsensus_gpu PROPERTIES
-    OUTPUT_NAME "luxconsensus_gpu"
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 0
-)
-
-# Platform suffix
-if(APPLE)
-    set_target_properties(luxconsensus_gpu PROPERTIES SUFFIX ".dylib")
-elseif(WIN32)
-    set_target_properties(luxconsensus_gpu PROPERTIES SUFFIX ".dll")
-else()
-    set_target_properties(luxconsensus_gpu PROPERTIES SUFFIX ".so")
-endif()
-
-# =============================================================================
-# C API (for CGO bindings)
-# =============================================================================
-
-add_library(luxconsensus_gpu_c SHARED
-    src/consensus_c_api.cpp
-)
-
-target_link_libraries(luxconsensus_gpu_c PRIVATE luxconsensus_gpu)
-
-target_include_directories(luxconsensus_gpu_c PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-)
-
-# =============================================================================
-# Installation
-# =============================================================================
+set(_gpu_sources_present TRUE)
+foreach(_src ${CONSENSUS_SOURCES})
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
+        set(_gpu_sources_present FALSE)
+        break()
+    endif()
+endforeach()
 
 include(GNUInstallDirs)
 
-install(TARGETS luxconsensus_gpu luxconsensus_gpu_c
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+if(_gpu_sources_present)
+    add_library(luxconsensus_gpu SHARED ${CONSENSUS_SOURCES})
+
+    target_include_directories(luxconsensus_gpu PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+        PRIVATE
+        ${LUX_GPU_INCLUDE}
+    )
+
+    if(LUX_CRYPTO_INCLUDE)
+        target_include_directories(luxconsensus_gpu PRIVATE ${LUX_CRYPTO_INCLUDE})
+    endif()
+
+    target_compile_definitions(luxconsensus_gpu PRIVATE
+        LUX_CONSENSUS_GPU_BUILD
+    )
+
+    set_target_properties(luxconsensus_gpu PROPERTIES
+        OUTPUT_NAME "luxconsensus_gpu"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 0
+    )
+
+    if(APPLE)
+        set_target_properties(luxconsensus_gpu PROPERTIES SUFFIX ".dylib")
+    elseif(WIN32)
+        set_target_properties(luxconsensus_gpu PROPERTIES SUFFIX ".dll")
+    else()
+        set_target_properties(luxconsensus_gpu PROPERTIES SUFFIX ".so")
+    endif()
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/consensus_c_api.cpp")
+        add_library(luxconsensus_gpu_c SHARED src/consensus_c_api.cpp)
+        target_link_libraries(luxconsensus_gpu_c PRIVATE luxconsensus_gpu)
+        target_include_directories(luxconsensus_gpu_c PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        )
+        install(TARGETS luxconsensus_gpu_c
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
+
+    install(TARGETS luxconsensus_gpu
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
 # =============================================================================
 # Consensus Harness Library (imported from luxfi/consensus/pkg/cpp/)
 # =============================================================================
 #
-# Builds only if all imported sources are present. Scope is the e2e test
-# harness (ZeroMQ peer transport + MLX consensus); independent of the
-# GPU kernel library above.
+# E2E test harness (ZeroMQ peer transport + MLX consensus). Imported from
+# luxfi/consensus/pkg/cpp where it was built with its own CMakeLists +
+# include layout. Header paths and C++20 std::span usage need a port pass
+# before it will build cleanly here — opt-in via -DLUX_CONSENSUS_BUILD_HARNESS=ON
+# once that work is done.
 
-set(_harness_present TRUE)
-foreach(_src ${CONSENSUS_HARNESS_SOURCES})
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
-        set(_harness_present FALSE)
-        break()
+option(LUX_CONSENSUS_BUILD_HARNESS "Build imported consensus harness (needs include-path port)" OFF)
+
+if(LUX_CONSENSUS_BUILD_HARNESS)
+    set(_harness_present TRUE)
+    foreach(_src ${CONSENSUS_HARNESS_SOURCES})
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
+            set(_harness_present FALSE)
+            break()
+        endif()
+    endforeach()
+
+    if(_harness_present)
+        add_library(luxconsensus_harness STATIC ${CONSENSUS_HARNESS_SOURCES})
+        target_include_directories(luxconsensus_harness PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+        )
+        target_compile_features(luxconsensus_harness PUBLIC cxx_std_20)
+        set_target_properties(luxconsensus_harness PROPERTIES
+            OUTPUT_NAME "luxconsensus_harness"
+            VERSION ${PROJECT_VERSION}
+        )
+        install(TARGETS luxconsensus_harness
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        )
     endif()
-endforeach()
-
-if(_harness_present)
-    add_library(luxconsensus_harness STATIC ${CONSENSUS_HARNESS_SOURCES})
-    target_include_directories(luxconsensus_harness PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-    )
-    set_target_properties(luxconsensus_harness PROPERTIES
-        OUTPUT_NAME "luxconsensus_harness"
-        VERSION ${PROJECT_VERSION}
-    )
-    install(TARGETS luxconsensus_harness
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    )
 endif()
 
 install(DIRECTORY include/lux
