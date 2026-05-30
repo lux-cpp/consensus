@@ -1,26 +1,33 @@
 # Copyright (c) 2024-2026 Lux Industries Inc.
 # SPDX-License-Identifier: BSD-3-Clause-Eco
 #
-# Lux Consensus GPU Library - GPU-accelerated consensus operations
+# Lux Consensus C++ — quasar witness verifier + GPU consensus ops.
 #
-# Provides unified GPU acceleration for:
-#   - Batch signature verification (BLS, ECDSA, Ed25519, ML-DSA)
-#   - Merkle/Verkle tree operations
-#   - Vote aggregation and threshold signatures
+# Quasar (always built, requires blst):
+#   - luxconsensus_quasar       : C++ surface (WitnessVerifier, WitnessAggregator)
+#   - luxconsensus_quasar_c     : extern "C" ABI for cgo (lux_quasar_*)
 #
-# Uses luxcpp/gpu as the backend abstraction layer.
+# GPU consensus ops (optional, requires lux/gpu.h):
+#   - luxconsensus_gpu          : GPU acceleration for batch verify / merkle / votes
+#
+# ZMQ test harness (opt-in via LUX_CONSENSUS_BUILD_ZMQ_HARNESS):
+#   - luxconsensus_harness      : E2E test scaffold (NOT production transport)
 
 cmake_minimum_required(VERSION 3.20)
 
-project(lux-consensus-gpu
-    VERSION 0.1.0
-    DESCRIPTION "GPU-accelerated consensus operations"
+project(lux-consensus
+    VERSION 0.2.0
+    DESCRIPTION "Lux consensus C++ — quasar witness + GPU ops"
     LANGUAGES CXX
 )
 
-set(CMAKE_CXX_STANDARD 17)
+# C++20 is required by the quasar surface (std::span). The pre-existing
+# GPU/ZMQ harness still compiles at C++17/20 individually (per-target).
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+include(GNUInstallDirs)
 
 # =============================================================================
 # Options
@@ -28,12 +35,18 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(LUX_CONSENSUS_BUILD_TESTS "Build tests" ON)
 option(LUX_CONSENSUS_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(LUX_CONSENSUS_BUILD_QUASAR "Build quasar witness verifier" ON)
+
+if(LUX_CONSENSUS_BUILD_TESTS)
+    enable_testing()
+endif()
 
 # =============================================================================
 # Dependencies
 # =============================================================================
 
-# Core GPU library (luxcpp/gpu)
+# Core GPU library (luxcpp/gpu) — OPTIONAL. Only required by the
+# luxconsensus_gpu target. The quasar verifier path stays GPU-free.
 if(DEFINED LUX_GPU_DIR)
     set(LUX_GPU_INCLUDE ${LUX_GPU_DIR}/include)
 elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/include/lux/gpu.h)
@@ -47,13 +60,62 @@ else()
     )
 endif()
 
-if(NOT LUX_GPU_INCLUDE)
-    message(FATAL_ERROR "Could not find lux/gpu.h")
+if(LUX_GPU_INCLUDE)
+    message(STATUS "lux/gpu.h: ${LUX_GPU_INCLUDE} (GPU ops enabled)")
+else()
+    message(STATUS "lux/gpu.h: NOT FOUND (GPU ops disabled, quasar still builds)")
 endif()
 
-message(STATUS "Using GPU headers from: ${LUX_GPU_INCLUDE}")
+# blst — required by quasar. Look for the .a in any of the cevm/crypto
+# build trees that already produce it, or the env-supplied LUX_BLST_DIR.
+if(LUX_CONSENSUS_BUILD_QUASAR)
+    if(DEFINED ENV{LUX_BLST_DIR})
+        set(LUX_BLST_DIR $ENV{LUX_BLST_DIR})
+    elseif(NOT DEFINED LUX_BLST_DIR)
+        # Probe the standard locations cevm + crypto build under.
+        foreach(_p
+            "${CMAKE_CURRENT_SOURCE_DIR}/../cevm/build/deps/src/blst"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../cevm/build-cpu-only/blst-oracle/src/blst_oracle"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../crypto/build/blst-oracle/src/blst_oracle"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../blst"
+        )
+            if(EXISTS "${_p}/libblst.a")
+                set(LUX_BLST_DIR "${_p}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(NOT LUX_BLST_DIR OR NOT EXISTS "${LUX_BLST_DIR}/libblst.a")
+        message(FATAL_ERROR
+            "quasar build needs libblst.a. Searched standard build trees. "
+            "Set -DLUX_BLST_DIR=/path/to/blst or LUX_BLST_DIR env var. "
+            "Disable quasar with -DLUX_CONSENSUS_BUILD_QUASAR=OFF.")
+    endif()
+    # blst bindings/blst.h
+    set(_BLST_INCLUDE "")
+    foreach(_inc
+        "${LUX_BLST_DIR}/bindings"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../blst/bindings"
+    )
+        if(EXISTS "${_inc}/blst.h")
+            set(_BLST_INCLUDE "${_inc}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _BLST_INCLUDE)
+        message(FATAL_ERROR "blst.h not found near ${LUX_BLST_DIR}; clone blst into ../blst or set bindings include path")
+    endif()
+    set(LUX_BLST_INCLUDE "${_BLST_INCLUDE}")
+    message(STATUS "blst static: ${LUX_BLST_DIR}/libblst.a")
+    message(STATUS "blst header: ${LUX_BLST_INCLUDE}/blst.h")
 
-# Crypto library (luxcpp/crypto)
+    add_library(blst_imported STATIC IMPORTED)
+    set_target_properties(blst_imported PROPERTIES
+        IMPORTED_LOCATION "${LUX_BLST_DIR}/libblst.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${LUX_BLST_INCLUDE}")
+endif()
+
+# Crypto library (luxcpp/crypto) — OPTIONAL.
 find_path(LUX_CRYPTO_INCLUDE lux/crypto.h
     PATHS
         ${CMAKE_CURRENT_SOURCE_DIR}/../crypto/include
@@ -62,7 +124,84 @@ find_path(LUX_CRYPTO_INCLUDE lux/crypto.h
 )
 
 # =============================================================================
-# Library Sources
+# Quasar witness verifier — hot-path BLS verify + share aggregator
+# =============================================================================
+#
+# Production-grade C++ implementation of luxfi/consensus/protocol/quasar
+# Verify and AggregateThresholdSignatures. Binds to blst PRIVATE (so the
+# consensus_quasar shared lib does not re-export blst symbols). The C ABI
+# in include/lux/quasar.h is the cgo bridge contract.
+
+if(LUX_CONSENSUS_BUILD_QUASAR)
+    set(QUASAR_CXX_SOURCES
+        src/quasar_verify.cpp
+        src/quasar_witness.cpp
+    )
+    add_library(luxconsensus_quasar STATIC ${QUASAR_CXX_SOURCES})
+    target_include_directories(luxconsensus_quasar
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+    )
+    target_compile_features(luxconsensus_quasar PUBLIC cxx_std_20)
+    target_compile_options(luxconsensus_quasar PRIVATE -O3 -Wall -Wextra)
+    target_link_libraries(luxconsensus_quasar PRIVATE blst_imported)
+    set_target_properties(luxconsensus_quasar PROPERTIES
+        OUTPUT_NAME "luxconsensus_quasar"
+        POSITION_INDEPENDENT_CODE ON)
+
+    # C ABI shim for cgo. Builds the same C++ surface into a separate
+    # shared library that exports only the extern "C" entry points.
+    add_library(luxconsensus_quasar_c SHARED src/quasar_ffi.cpp)
+    target_link_libraries(luxconsensus_quasar_c PRIVATE luxconsensus_quasar blst_imported)
+    target_include_directories(luxconsensus_quasar_c PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_compile_features(luxconsensus_quasar_c PRIVATE cxx_std_20)
+    target_compile_options(luxconsensus_quasar_c PRIVATE -O3 -Wall -Wextra)
+    set_target_properties(luxconsensus_quasar_c PROPERTIES
+        OUTPUT_NAME "luxconsensus_quasar"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 0)
+    if(APPLE)
+        set_target_properties(luxconsensus_quasar_c PROPERTIES SUFFIX ".dylib")
+    elseif(WIN32)
+        set_target_properties(luxconsensus_quasar_c PROPERTIES SUFFIX ".dll")
+    else()
+        set_target_properties(luxconsensus_quasar_c PROPERTIES SUFFIX ".so")
+    endif()
+
+    install(TARGETS luxconsensus_quasar luxconsensus_quasar_c
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES
+        include/lux/quasar.h
+        include/lux/quasar.hpp
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lux)
+
+    if(LUX_CONSENSUS_BUILD_TESTS)
+        add_executable(test_quasar_verify tests/test_quasar_verify.cpp)
+        target_link_libraries(test_quasar_verify PRIVATE luxconsensus_quasar luxconsensus_quasar_c blst_imported)
+        target_compile_features(test_quasar_verify PRIVATE cxx_std_20)
+        target_compile_options(test_quasar_verify PRIVATE -O3 -Wall -Wextra)
+        add_test(NAME quasar_verify_parity
+            COMMAND test_quasar_verify "${CMAKE_CURRENT_SOURCE_DIR}/testdata")
+        set_tests_properties(quasar_verify_parity PROPERTIES TIMEOUT 60)
+
+        add_executable(test_quasar_witness tests/test_quasar_witness.cpp)
+        target_link_libraries(test_quasar_witness PRIVATE luxconsensus_quasar luxconsensus_quasar_c blst_imported)
+        target_compile_features(test_quasar_witness PRIVATE cxx_std_20)
+        target_compile_options(test_quasar_witness PRIVATE -O3 -Wall -Wextra)
+        add_test(NAME quasar_witness_aggregate
+            COMMAND test_quasar_witness "${CMAKE_CURRENT_SOURCE_DIR}/testdata")
+        set_tests_properties(quasar_witness_aggregate PROPERTIES TIMEOUT 60)
+    endif()
+endif()
+
+# =============================================================================
+# Library Sources (GPU consensus ops — optional)
 # =============================================================================
 
 set(CONSENSUS_SOURCES
@@ -93,6 +232,8 @@ set(CONSENSUS_HEADERS
 
 # =============================================================================
 # Consensus GPU Library — builds only if planned source files exist
+# AND lux/gpu.h is on disk (GPU backend is optional; quasar above does
+# not need it).
 # =============================================================================
 
 set(_gpu_sources_present TRUE)
@@ -103,9 +244,7 @@ foreach(_src ${CONSENSUS_SOURCES})
     endif()
 endforeach()
 
-include(GNUInstallDirs)
-
-if(_gpu_sources_present)
+if(_gpu_sources_present AND LUX_GPU_INCLUDE)
     add_library(luxconsensus_gpu SHARED ${CONSENSUS_SOURCES})
 
     target_include_directories(luxconsensus_gpu PUBLIC
@@ -209,8 +348,13 @@ install(DIRECTORY include/lux
 # =============================================================================
 
 message(STATUS "")
-message(STATUS "=== Lux Consensus GPU Configuration ===")
-message(STATUS "  Version: ${PROJECT_VERSION}")
-message(STATUS "  GPU Include: ${LUX_GPU_INCLUDE}")
-message(STATUS "  Build Tests: ${LUX_CONSENSUS_BUILD_TESTS}")
+message(STATUS "=== Lux Consensus Configuration ===")
+message(STATUS "  Version:        ${PROJECT_VERSION}")
+message(STATUS "  Quasar:         ${LUX_CONSENSUS_BUILD_QUASAR}")
+if(LUX_GPU_INCLUDE)
+    message(STATUS "  GPU Include:    ${LUX_GPU_INCLUDE}")
+else()
+    message(STATUS "  GPU Include:    (disabled)")
+endif()
+message(STATUS "  Build Tests:    ${LUX_CONSENSUS_BUILD_TESTS}")
 message(STATUS "")
