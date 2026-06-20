@@ -9,6 +9,7 @@
 #include "lux/quasar.hpp"
 
 #include <span>
+#include <stdexcept>
 
 extern "C" {
 
