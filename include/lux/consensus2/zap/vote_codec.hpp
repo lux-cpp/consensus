@@ -41,6 +41,10 @@ inline std::optional<SignedVote> decode_vote(const std::vector<std::uint8_t> & p
         return std::nullopt;
     if (block_id.size() != 32 || voter.size() != 48 || sig.size() != 96)
         return std::nullopt;
+    // Canonical framing: reject any trailing bytes after the three fixed fields, so
+    // `vote ‖ garbage` cannot decode to a valid vote (red L6, wire non-malleability).
+    if (r.remaining() != 0)
+        return std::nullopt;
     SignedVote v;
     for (std::size_t i = 0; i < 32; ++i) v.block_id[i] = block_id[i];
     for (std::size_t i = 0; i < 48; ++i) v.voter[i] = voter[i];

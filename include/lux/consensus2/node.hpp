@@ -76,7 +76,6 @@ private:
     VoteTransport & tx_;
 
     std::map<BlockId, VotePosition> positions_;
-    std::map<BlockId, std::uint64_t> items_;  // wave handle per block
     std::map<BlockId, bool> voted_;           // has this node broadcast its vote
 };
 

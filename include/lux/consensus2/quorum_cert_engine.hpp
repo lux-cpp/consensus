@@ -50,6 +50,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -176,10 +177,20 @@ private:
     // tally), matching Go StakeSource.Weight semantics.
     [[nodiscard]] std::uint64_t stake_of(const PubKey& voter) const;
 
+    // THE GATE on an already-resolved Pending — assumes mu_ is held. Factored out
+    // so is_final and assemble_cert each take mu_ exactly once (no re-entrant lock).
+    [[nodiscard]] bool meets_quorum(const Pending& p) const noexcept;
+
     std::map<PubKey, std::uint64_t> validators_;   // pubkey → stake (sorted, distinct)
     std::uint64_t                   total_stake_;   // Σ in-set stake
     std::uint32_t                   alpha_;         // distinct-voter floor
     std::map<BlockId, Pending>      pending_;       // block → accumulated votes
+
+    // Serializes all access to mutable pending_ state. The production gossip mesh
+    // delivers votes from multiple reader threads (one per peer); without this the
+    // receive path is a data race (red M1, TSan-proven). validators_/total_stake_/
+    // alpha_ are immutable after construction, so verify_cert reads them lock-free.
+    mutable std::mutex mu_;
 };
 
 }  // namespace lux::consensus2
