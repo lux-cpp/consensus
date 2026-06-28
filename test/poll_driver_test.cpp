@@ -28,7 +28,7 @@ int main() {
 
     // K=5, alpha=0.8 → threshold = int(4.0) = 4 of 5; beta = 4 consecutive rounds.
     const WaveConfig cfg{/*k=*/5, /*alpha=*/0.8, /*beta=*/4};
-    const std::uint64_t item = 0xABCD;
+    const Item item = [] { Item i{}; i[0] = 0xAB; i[1] = 0xCD; return i; }();  // wave keys on the full 32-byte id
 
     // [1] A virtuous run: 4 consecutive ACCEPT-supermajority rounds → Accept.
     {

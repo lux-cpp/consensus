@@ -18,8 +18,9 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <unordered_map>
+#include <map>
 
 namespace lux::consensus2 {
 
@@ -31,8 +32,13 @@ struct WaveConfig {
     std::uint32_t beta = 15;     // consecutive successful rounds required to decide
 };
 
-// One item == one thing being voted on (e.g. a block id reduced to a handle).
-// Kept decoupled from BlockId so the poll layer has no crypto dependency.
+// An item is keyed by the FULL 32-byte block id — never a lossy prefix. Keying on
+// a truncated handle would let an adversary grind a colliding id to cross-
+// contaminate one block's confidence with another's polls (red M4). The key is
+// the raw 32 bytes; the poll layer still carries no crypto dependency (it neither
+// signs nor verifies — it only compares ids for equality).
+using Item = std::array<std::uint8_t, 32>;
+
 class Wave {
 public:
     explicit Wave(WaveConfig cfg);
@@ -47,10 +53,10 @@ public:
     //   same preference as last    → count++   (consecutive confirmation)
     //   preference switched        → count = 1
     //   count ≥ beta               → decide (latched)
-    Decision record_round(std::uint64_t item, std::uint32_t yes, std::uint32_t total);
+    Decision record_round(const Item & item, std::uint32_t yes, std::uint32_t total);
 
-    Decision decision(std::uint64_t item) const;
-    std::uint32_t confidence(std::uint64_t item) const;  // current consecutive count
+    Decision decision(const Item & item) const;
+    std::uint32_t confidence(const Item & item) const;  // current consecutive count
     int threshold() const noexcept { return threshold_; }
 
 private:
@@ -64,7 +70,7 @@ private:
 
     WaveConfig cfg_;
     int threshold_;
-    std::unordered_map<std::uint64_t, State> states_;
+    std::map<Item, State> states_;  // std::map: total order on the 32-byte id, no hash needed
 };
 
 }  // namespace lux::consensus2

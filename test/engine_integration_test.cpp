@@ -51,12 +51,6 @@ Signature sign_vote(const Key& key, const VotePosition& pos) {
     if (cevm::crypto::bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign failed"); std::exit(2); }
     return sig;
 }
-// Reduce a block id to a wave item handle (stable, first 8 bytes big-endian).
-std::uint64_t item_of(const BlockId& b) {
-    std::uint64_t h = 0;
-    for (int i = 0; i < 8; ++i) h = (h << 8) | b[i];
-    return h;
-}
 }  // namespace
 
 int main() {
@@ -78,7 +72,7 @@ int main() {
         A.block_id.fill(0x41);
         A.height = 100;
         A.epoch = 7;
-        const std::uint64_t item = item_of(A.block_id);
+        const auto & item = A.block_id;
 
         // Liveness: 4 virtuous polls (all 5 sampled peers vote yes) → decide Accept.
         Decision d = Decision::Undecided;
@@ -105,7 +99,7 @@ int main() {
         B.block_id.fill(0x42);
         B.height = 101;
         B.epoch = 7;
-        const std::uint64_t item = item_of(B.block_id);
+        const auto & item = B.block_id;
 
         // 3 yes-rounds then a split (inconclusive) → confidence resets, undecided.
         wave.record_round(item, 5, 5);

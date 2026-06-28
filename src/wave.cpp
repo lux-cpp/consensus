@@ -27,9 +27,14 @@ Wave::Wave(WaveConfig cfg) : cfg_(cfg) {
         threshold_ = static_cast<int>(cfg_.k);
 }
 
-Decision Wave::record_round(std::uint64_t item, std::uint32_t yes, std::uint32_t total) {
+Decision Wave::record_round(const Item & item, std::uint32_t yes, std::uint32_t total) {
     State& st = states_[item];
     if (st.decided) return st.result;      // latched — never reopen a decision
+    // Clamp the tally to the committee size: with total > k the constructor's
+    // majority guard (threshold·2 > k) no longer prevents BOTH sides clearing the
+    // threshold in one round (red L5). A correct sampler never exceeds k; clamping
+    // makes the "exactly one side can be strong" invariant hold unconditionally.
+    if (total > cfg_.k) total = cfg_.k;
     if (total == 0) return st.result;      // no responses this round; no state change
     if (yes > total) yes = total;          // defensive: a tally cannot exceed its total
 
@@ -61,12 +66,12 @@ Decision Wave::record_round(std::uint64_t item, std::uint32_t yes, std::uint32_t
     return st.result;
 }
 
-Decision Wave::decision(std::uint64_t item) const {
+Decision Wave::decision(const Item & item) const {
     const auto it = states_.find(item);
     return it == states_.end() ? Decision::Undecided : it->second.result;
 }
 
-std::uint32_t Wave::confidence(std::uint64_t item) const {
+std::uint32_t Wave::confidence(const Item & item) const {
     const auto it = states_.find(item);
     return it == states_.end() ? 0 : it->second.count;
 }

@@ -91,6 +91,7 @@ std::uint64_t QuorumCertEngine::stake_of(const PubKey& voter) const {
 }
 
 bool QuorumCertEngine::submit(const VotePosition& pos) {
+    const std::lock_guard<std::mutex> lock(mu_);
     const auto [it, inserted] = pending_.try_emplace(pos.block_id);
     if (!inserted) return false;  // already pending — idempotent guard
     Pending& p = it->second;
@@ -102,6 +103,7 @@ bool QuorumCertEngine::submit(const VotePosition& pos) {
 VoteResult QuorumCertEngine::record_vote(const BlockId& block_id,
                                          const PubKey& voter,
                                          const Signature& sig) {
+    const std::lock_guard<std::mutex> lock(mu_);
     const auto pit = pending_.find(block_id);
     if (pit == pending_.end()) return VoteResult::RejectedNoSuchBlock;
     Pending& p = pit->second;
@@ -127,11 +129,7 @@ VoteResult QuorumCertEngine::record_vote(const BlockId& block_id,
     return VoteResult::Accepted;
 }
 
-bool QuorumCertEngine::is_final(const BlockId& block_id) const {
-    const auto it = pending_.find(block_id);
-    if (it == pending_.end()) return false;
-    const Pending& p = it->second;
-
+bool QuorumCertEngine::meets_quorum(const Pending& p) const noexcept {
     // FAIL-CLOSED: no stake model ⇒ cannot assert a supermajority.
     if (total_stake_ == 0) return false;
     // Count quorum: α distinct voters.
@@ -141,19 +139,29 @@ bool QuorumCertEngine::is_final(const BlockId& block_id) const {
     return true;
 }
 
+bool QuorumCertEngine::is_final(const BlockId& block_id) const {
+    const std::lock_guard<std::mutex> lock(mu_);
+    const auto it = pending_.find(block_id);
+    return it != pending_.end() && meets_quorum(it->second);
+}
+
 std::size_t QuorumCertEngine::distinct_voters(const BlockId& block_id) const {
+    const std::lock_guard<std::mutex> lock(mu_);
     const auto it = pending_.find(block_id);
     return it == pending_.end() ? 0 : it->second.votes.size();
 }
 
 std::uint64_t QuorumCertEngine::voted_stake(const BlockId& block_id) const {
+    const std::lock_guard<std::mutex> lock(mu_);
     const auto it = pending_.find(block_id);
     return it == pending_.end() ? 0 : it->second.voted_stake;
 }
 
 std::optional<QuorumCert> QuorumCertEngine::assemble_cert(const BlockId& block_id) const {
-    if (!is_final(block_id)) return std::nullopt;  // only certify a final block
-    const Pending& p = pending_.find(block_id)->second;
+    const std::lock_guard<std::mutex> lock(mu_);
+    const auto pit = pending_.find(block_id);
+    if (pit == pending_.end() || !meets_quorum(pit->second)) return std::nullopt;
+    const Pending& p = pit->second;
 
     // votes is a std::map keyed by pubkey ⇒ iteration is already strictly-ascending
     // and distinct — exactly the canonical "strictly increasing voter" order.
