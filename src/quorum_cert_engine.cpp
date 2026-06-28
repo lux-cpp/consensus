@@ -8,6 +8,7 @@
 
 #include "bls_signature.hpp"  // cevm::crypto::bls — REUSED crypto core (luxcpp/crypto/bls)
 
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 
@@ -76,6 +77,10 @@ QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators, std::uint3
             throw std::invalid_argument("consensus2: in-set validator has zero stake");
         if (!validators_.emplace(v.pubkey, v.stake).second)
             throw std::invalid_argument("consensus2: duplicate validator pubkey");
+        // Checked add: a wrapped total_stake_ would corrupt the 2/3 floor and is a
+        // safety bug, not a config error. Fail-closed at construction instead.
+        if (total_stake_ > UINT64_MAX - v.stake)
+            throw std::invalid_argument("consensus2: total stake overflows uint64");
         total_stake_ += v.stake;
     }
 }
@@ -202,6 +207,9 @@ bool QuorumCertEngine::verify_cert(const QuorumCert& cert) const {
 
     // (7) CRYPTO: the aggregate signature verifies over the canonical message under
     //     the aggregate of the voters' pubkeys. POP ciphersuite ⇒ rogue-key-safe.
+    //     PRECONDITION: each validator pubkey admitted to the set MUST have had its
+    //     proof-of-possession verified upstream (P-chain admission). fast_aggregate_verify
+    //     is rogue-key-safe ONLY under that assumption; this gate trusts the admitted set.
     const std::vector<std::uint8_t> msg = canonical_vote_message(cert.position);
     std::vector<std::uint8_t> pks_flat;
     pks_flat.reserve(cert.voters.size() * 48);
