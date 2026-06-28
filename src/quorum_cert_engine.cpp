@@ -90,6 +90,11 @@ std::uint64_t QuorumCertEngine::stake_of(const PubKey& voter) const {
     return it == validators_.end() ? 0 : it->second;
 }
 
+bool QuorumCertEngine::drop(const BlockId& block_id) {
+    const std::lock_guard<std::mutex> lock(mu_);
+    return pending_.erase(block_id) != 0;
+}
+
 bool QuorumCertEngine::submit(const VotePosition& pos) {
     const std::lock_guard<std::mutex> lock(mu_);
     const auto [it, inserted] = pending_.try_emplace(pos.block_id);
