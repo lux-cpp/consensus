@@ -63,3 +63,8 @@ add_executable(poll_driver_test test/poll_driver_test.cpp)
 target_link_libraries(poll_driver_test PRIVATE consensus2)
 target_compile_options(poll_driver_test PRIVATE -Wall -Wextra)
 add_test(NAME poll_driver COMMAND poll_driver_test)
+
+add_executable(engine_integration_test test/engine_integration_test.cpp)
+target_link_libraries(engine_integration_test PRIVATE consensus2)
+target_compile_options(engine_integration_test PRIVATE -Wall -Wextra)
+add_test(NAME engine_integration COMMAND engine_integration_test)
