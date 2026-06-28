@@ -74,6 +74,11 @@ target_link_libraries(multi_node_test PRIVATE consensus2)
 target_compile_options(multi_node_test PRIVATE -Wall -Wextra)
 add_test(NAME multi_node COMMAND multi_node_test)
 
+add_executable(batch_verify_attack_test test/batch_verify_attack_test.cpp)
+target_link_libraries(batch_verify_attack_test PRIVATE consensus2)
+target_compile_options(batch_verify_attack_test PRIVATE -Wall -Wextra)
+add_test(NAME batch_verify_attack COMMAND batch_verify_attack_test)
+
 # ZAP vote transport — votes over the canonical ZAP wire codec (zap-cpp-core).
 # Gated on -DZAP_DIR (the zap-cpp-core include root); core consensus2 has no ZAP dep.
 if (ZAP_DIR)
