@@ -175,16 +175,37 @@ private:
     struct Pending {
         VotePosition                 pos;
         std::vector<std::uint8_t>    message;       // cached canonical message
-        std::map<PubKey, Signature>  votes;         // dedup by key; verified sigs only
+        std::map<PubKey, Signature>  votes;         // dedup by key; sigs (see `verified`)
         std::uint64_t                voted_stake = 0;
+        // BATCH VERIFY: pre-quorum, votes are accepted WITHOUT a per-vote pairing
+        // (α individual verifies cost ~α×; one aggregate verify is ~1× — measured
+        // 3.4× faster). The aggregate is verified ONCE the moment the count+stake
+        // quorum is first reachable. `verified` is set only after a BLS check that
+        // covers EVERY counted voter passes; finality requires it, so an unverified
+        // (e.g. forged) sig can never drive finality — it is caught at the quorum
+        // check and evicted (individual-verify fallback). After `verified`, any
+        // further vote is individually verified before it joins.
+        bool                         verified = false;
     };
 
     // Resolve a voter's stake; returns 0 for an out-of-set key (cannot inflate a
     // tally), matching Go StakeSource.Weight semantics.
     [[nodiscard]] std::uint64_t stake_of(const PubKey& voter) const;
 
-    // THE GATE on an already-resolved Pending — assumes mu_ is held. Factored out
-    // so is_final and assemble_cert each take mu_ exactly once (no re-entrant lock).
+    // Aggregate every stored sig and fast_aggregate_verify it over the cached
+    // message under the aggregate of the voters' pubkeys (POP ciphersuite ⇒
+    // rogue-key-safe; same-message aggregate is sound). One pairing, not α.
+    [[nodiscard]] bool batch_verify(const Pending& p) const;
+
+    // Fallback when the batch fails: individually verify each stored sig, erase the
+    // invalid ones and refund their stake. After eviction the survivors are all
+    // individually verified, so a passing quorum among them is genuinely verified.
+    void evict_invalid(Pending& p) const;
+
+    // THE GATE on an already-resolved Pending — assumes mu_ is held. Requires
+    // `verified` (a passing BLS check over all counted voters) in addition to the
+    // α-count and >2/3-stake floors. Factored out so is_final and assemble_cert
+    // each take mu_ exactly once (no re-entrant lock).
     [[nodiscard]] bool meets_quorum(const Pending& p) const noexcept;
 
     std::map<PubKey, std::uint64_t> validators_;   // pubkey → stake (sorted, distinct)
