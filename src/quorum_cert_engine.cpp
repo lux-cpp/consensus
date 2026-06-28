@@ -117,26 +117,85 @@ VoteResult QuorumCertEngine::record_vote(const BlockId& block_id,
     const std::uint64_t stake = stake_of(voter);
     if (stake == 0) return VoteResult::RejectedUnknownValidator;
 
-    // Dedup by validator key BEFORE the (expensive) pairing: a replay of an
-    // already-recorded voter is cheaply rejected and can never double-count.
-    // votes only ever holds VERIFIED sigs, so a voter whose earlier bad sig was
-    // rejected is absent here and may still land a valid vote.
+    // Dedup by validator key: a replay of an already-recorded voter is cheaply
+    // rejected and can never double-count.
     if (p.votes.find(voter) != p.votes.end()) return VoteResult::Duplicate;
 
-    // Genuine BLS verification over the pending block's own canonical message. A
-    // forged sig, or a sig over a different position, fails here and is NOT
-    // counted — stake aggregates only for verified votes (the quasar invariant:
-    // "unwired/unverified lanes never accept").
-    if (!bls_verify(voter, p.message, sig)) return VoteResult::RejectedBadSignature;
+    if (p.verified)
+    {
+        // The quorum is already verified. An extra vote joins only after its own
+        // individual pairing passes, so the "every counted voter is verified"
+        // invariant is preserved.
+        if (!bls_verify(voter, p.message, sig)) return VoteResult::RejectedBadSignature;
+        p.votes.emplace(voter, sig);
+        p.voted_stake += stake;
+        return VoteResult::Accepted;
+    }
 
+    // Pre-quorum: accept as a CANDIDATE with no per-vote pairing. BLS over the same
+    // message aggregates, so verification is O(1) (one aggregate pairing), not O(α)
+    // individual pairings — done once below the moment the quorum is reachable.
     p.votes.emplace(voter, sig);
     p.voted_stake += stake;
+
+    if (p.votes.size() >= alpha_ && p.voted_stake > two_thirds_stake_floor(total_stake_))
+    {
+        if (batch_verify(p))
+        {
+            p.verified = true;       // ONE pairing certifies the whole quorum
+        }
+        else
+        {
+            evict_invalid(p);        // a forged candidate is here: drop it, verify survivors
+            // Best-effort attribution: if THIS vote was the forged one the quorum
+            // check just caught, report it (it has been evicted and never counted).
+            if (p.votes.find(voter) == p.votes.end())
+                return VoteResult::RejectedBadSignature;
+        }
+    }
     return VoteResult::Accepted;
+}
+
+bool QuorumCertEngine::batch_verify(const Pending& p) const {
+    std::vector<std::uint8_t> pks, sigs;
+    pks.reserve(p.votes.size() * 48);
+    sigs.reserve(p.votes.size() * 96);
+    for (const auto& [pk, sig] : p.votes) {
+        pks.insert(pks.end(), pk.begin(), pk.end());
+        sigs.insert(sigs.end(), sig.begin(), sig.end());
+    }
+    Signature agg{};
+    if (cevm::crypto::bls::aggregate_sigs(sigs.data(), p.votes.size(), agg.data()) != 0)
+        return false;
+    // Same canonical message for every voter ⇒ fast_aggregate_verify is one pairing.
+    return cevm::crypto::bls::fast_aggregate_verify(
+               pks.data(), p.votes.size(), p.message.data(), p.message.size(), agg.data()) == 0;
+}
+
+void QuorumCertEngine::evict_invalid(Pending& p) const {
+    // The aggregate failed ⇒ ≥1 candidate sig is bad. Pay the O(α) individual
+    // verify ONLY on this attack path; drop forged sigs and refund their stake.
+    for (auto it = p.votes.begin(); it != p.votes.end();) {
+        if (!bls_verify(it->first, p.message, it->second)) {
+            p.voted_stake -= stake_of(it->first);
+            it = p.votes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Survivors are each individually verified; a quorum among them is genuine.
+    if (p.votes.size() >= alpha_ && p.voted_stake > two_thirds_stake_floor(total_stake_))
+        p.verified = true;
 }
 
 bool QuorumCertEngine::meets_quorum(const Pending& p) const noexcept {
     // FAIL-CLOSED: no stake model ⇒ cannot assert a supermajority.
     if (total_stake_ == 0) return false;
+    // VERIFIED: a BLS check covering every counted voter has passed. An unverified
+    // (e.g. forged) candidate can satisfy the count/stake floors but never this —
+    // so it can never drive finality. Set only by the aggregate verify (or the
+    // individual-verify fallback) in record_vote.
+    if (!p.verified) return false;
     // Count quorum: α distinct voters.
     if (p.votes.size() < alpha_) return false;
     // STRICT stake supermajority: voted > floor(2/3·total). Both gates required.

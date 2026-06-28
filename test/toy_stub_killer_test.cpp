@@ -198,43 +198,53 @@ int main() {
     }
     verdict(4, s4);
 
-    // ── [5/5] forged / wrong-position signatures are rejected, not counted ───
-    banner(5, "forged / wrong-position BLS sigs REJECTED (never counted)");
+    // ── [5/5] forged sigs NEVER drive finality (O(1) batch-verify path) ──────
+    //   Verification is deferred to ONE aggregate pairing at quorum (not α
+    //   individual pairings). The toy-stub-killer property is unchanged in
+    //   substance: a forged sig can pad the count/stake but is caught and evicted
+    //   at the quorum check, so it can never finalize; only genuine sigs do.
+    banner(5, "forged BLS sigs are evicted at quorum — never finalize");
     bool s5 = true;
     {
         const VotePosition E{make_block(0x46), 104, 7};
         s5 &= check(engine.submit(E), "submit(E)");
 
-        // 5a: corrupt one signature byte ⇒ RejectedBadSignature, not counted.
-        Signature forged = sign_vote(keys[4], E);
-        forged[20] ^= 0x01;
-        s5 &= check(engine.record_vote(E.block_id, keys[4].pk, forged) == VoteResult::RejectedBadSignature,
-                    "corrupted sig ⇒ RejectedBadSignature");
-
-        // 5b: a VALID sig over a DIFFERENT position ⇒ rejected (position binding).
-        const VotePosition Eprime{make_block(0x99), 104, 7};  // different block id
-        Signature wrong_pos = sign_vote(keys[3], Eprime);
-        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, wrong_pos) == VoteResult::RejectedBadSignature,
-                    "sig over a different position ⇒ RejectedBadSignature");
-
-        // 5c: an out-of-set key (valid self-sig) ⇒ RejectedUnknownValidator.
+        // Out-of-set + unknown-block are cheap checks, still rejected per-vote.
         Key outsider = make_key(0xEE);
-        Signature outsider_sig = sign_vote(outsider, E);
-        s5 &= check(engine.record_vote(E.block_id, outsider.pk, outsider_sig) == VoteResult::RejectedUnknownValidator,
+        s5 &= check(engine.record_vote(E.block_id, outsider.pk, sign_vote(outsider, E)) == VoteResult::RejectedUnknownValidator,
                     "out-of-set voter ⇒ RejectedUnknownValidator");
-
-        // none of the above were counted.
-        s5 &= check(engine.distinct_voters(E.block_id) == 0, "no rejected vote was counted");
-        s5 &= check(engine.is_final(E.block_id) == false, "is_final(E) == false");
-
-        // 5d: a rejected bad sig does NOT poison the validator — its VALID sig lands.
-        s5 &= check(engine.record_vote(E.block_id, keys[4].pk, sign_vote(keys[4], E)) == VoteResult::Accepted,
-                    "validator's subsequent VALID sig is Accepted");
-        s5 &= check(engine.distinct_voters(E.block_id) == 1, "now exactly 1 valid voter");
-
-        // 5e: voting on a block that was never submitted ⇒ RejectedNoSuchBlock.
         s5 &= check(engine.record_vote(make_block(0x77), keys[0].pk, sign_vote(keys[0], E)) == VoteResult::RejectedNoSuchBlock,
                     "vote on unknown block ⇒ RejectedNoSuchBlock");
+
+        // 3 GENUINE votes (k0,k1,k2) — below the α=4 quorum, so no verify yet.
+        for (int i = 0; i < 3; ++i)
+            s5 &= check(engine.record_vote(E.block_id, keys[i].pk, sign_vote(keys[i], E)) == VoteResult::Accepted,
+                        "genuine candidate " + std::to_string(i) + " accepted");
+        s5 &= check(!engine.is_final(E.block_id), "3 votes (60 stake) not final");
+
+        // 4th vote is FORGED (k3): count→4 and stake→80 reach quorum, so the
+        // aggregate verify runs, FAILS, and evicts the forged vote.
+        Signature forged = sign_vote(keys[3], E);
+        forged[20] ^= 0x01;
+        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, forged) == VoteResult::RejectedBadSignature,
+                    "forged vote triggering the quorum check ⇒ RejectedBadSignature");
+        s5 &= check(engine.distinct_voters(E.block_id) == 3, "forged vote evicted — 3 genuine remain");
+        s5 &= check(engine.voted_stake(E.block_id) == 60, "stake refunded to 60 after eviction");
+        s5 &= check(!engine.is_final(E.block_id), "a forged-padded quorum does NOT finalize");
+
+        // k3's GENUINE sig now lands → real 4-of-5 / 80 stake → finalizes.
+        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, sign_vote(keys[3], E)) == VoteResult::Accepted,
+                    "k3's valid sig accepted after its forged one was evicted");
+        s5 &= check(engine.is_final(E.block_id), "genuine quorum finalizes");
+        auto c5 = engine.assemble_cert(E.block_id);
+        s5 &= check(c5.has_value() && engine.verify_cert(*c5) && c5->voted_stake == 80,
+                    "cert verifies, carries only the 4 genuine voters (80 stake)");
+
+        // post-quorum: a forged extra vote (k4) is individually rejected.
+        Signature f4 = sign_vote(keys[4], E);
+        f4[10] ^= 0x01;
+        s5 &= check(engine.record_vote(E.block_id, keys[4].pk, f4) == VoteResult::RejectedBadSignature,
+                    "post-quorum forged vote ⇒ RejectedBadSignature");
     }
     verdict(5, s5);
 
