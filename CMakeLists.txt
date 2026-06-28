@@ -46,7 +46,7 @@ target_include_directories(bls_signature PUBLIC "${BLS_DIR}")
 target_link_libraries(bls_signature PUBLIC blst)
 
 # ── consensus2 — the NEW finality gate (the seed) ─────────────────────────────
-add_library(consensus2 STATIC src/quorum_cert_engine.cpp)
+add_library(consensus2 STATIC src/quorum_cert_engine.cpp src/wave.cpp)
 target_include_directories(consensus2 PUBLIC include)
 target_link_libraries(consensus2 PUBLIC bls_signature)
 target_compile_options(consensus2 PRIVATE -Wall -Wextra -Wpedantic)
@@ -58,3 +58,8 @@ target_compile_options(toy_stub_killer_test PRIVATE -Wall -Wextra)
 
 enable_testing()
 add_test(NAME toy_stub_killer COMMAND toy_stub_killer_test)
+
+add_executable(poll_driver_test test/poll_driver_test.cpp)
+target_link_libraries(poll_driver_test PRIVATE consensus2)
+target_compile_options(poll_driver_test PRIVATE -Wall -Wextra)
+add_test(NAME poll_driver COMMAND poll_driver_test)
