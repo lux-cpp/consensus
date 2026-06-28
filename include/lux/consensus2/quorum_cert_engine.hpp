@@ -158,6 +158,12 @@ public:
     // NOT consult live pending state — a pure witness check.
     [[nodiscard]] bool verify_cert(const QuorumCert& cert) const;
 
+    // Drop a block's accumulated votes once the caller has committed it (assembled
+    // its cert). Without this the engine retains every finalized block's vote set
+    // forever — unbounded memory, and an O(N) scan for any caller that re-walks
+    // pending_. Idempotent; returns true if a block was removed.
+    bool drop(const BlockId& block_id);
+
     // ── Introspection (tests / observability)
     [[nodiscard]] std::uint32_t alpha() const noexcept { return alpha_; }
     [[nodiscard]] std::uint64_t total_stake() const noexcept { return total_stake_; }
