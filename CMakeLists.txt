@@ -46,7 +46,7 @@ target_include_directories(bls_signature PUBLIC "${BLS_DIR}")
 target_link_libraries(bls_signature PUBLIC blst)
 
 # ── consensus2 — the NEW finality gate (the seed) ─────────────────────────────
-add_library(consensus2 STATIC src/quorum_cert_engine.cpp src/wave.cpp)
+add_library(consensus2 STATIC src/quorum_cert_engine.cpp src/wave.cpp src/node.cpp)
 target_include_directories(consensus2 PUBLIC include)
 target_link_libraries(consensus2 PUBLIC bls_signature)
 target_compile_options(consensus2 PRIVATE -Wall -Wextra -Wpedantic)
@@ -68,3 +68,8 @@ add_executable(engine_integration_test test/engine_integration_test.cpp)
 target_link_libraries(engine_integration_test PRIVATE consensus2)
 target_compile_options(engine_integration_test PRIVATE -Wall -Wextra)
 add_test(NAME engine_integration COMMAND engine_integration_test)
+
+add_executable(multi_node_test test/multi_node_test.cpp)
+target_link_libraries(multi_node_test PRIVATE consensus2)
+target_compile_options(multi_node_test PRIVATE -Wall -Wextra)
+add_test(NAME multi_node COMMAND multi_node_test)
