@@ -98,11 +98,13 @@ int main() {
         for (auto & n : B) n->submit(pos);
 
         // A votes (3 ZAP frames written to the wire); B reads them off the wire.
-        for (auto & n : A) n->poll(pos, /*yes=*/5, /*total=*/5);
+        // β=4 confirmation rounds — a node signs only on the β-confirmed wave
+        // decision (not a single round), so drive the full confidence build.
+        for (int r = 0; r < 4; ++r) for (auto & n : A) n->poll(pos, /*yes=*/5, /*total=*/5);
         for (int i = 0; i < 3; ++i) check(txB.pump(), "B reads an A vote off the ZAP wire");
 
         // B votes (2 frames); A reads them off the wire.
-        for (auto & n : B) n->poll(pos, 5, 5);
+        for (int r = 0; r < 4; ++r) for (auto & n : B) n->poll(pos, 5, 5);
         for (int i = 0; i < 2; ++i) check(txA.pump(), "A reads a B vote off the ZAP wire");
 
         // Each side now holds all 5 votes — independently final, cert verifies.
