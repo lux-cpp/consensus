@@ -30,10 +30,13 @@ Decision Node::poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t t
     // wave is keyed on the FULL block id (red M4) — no lossy handle.
     const Decision d = wave_.record_round(pos.block_id, yes, total);
 
-    // First time this node sees an ACCEPT supermajority, it signs and broadcasts
-    // its own vote — exactly once. The epoch is bound in the position's canonical
-    // message, so it is signed over without the Node tracking it separately.
-    if (!voted_[pos.block_id] && static_cast<int>(yes) >= wave_.threshold()) {
+    // Sign ONLY once wave reaches its β-confirmed ACCEPT decision — never on a
+    // single transient round (red C1). A validator's BLS vote is an irrevocable
+    // contribution to a >2/3-stake finality cert; it must carry the full FPC
+    // confidence (β consecutive α-supermajority rounds, reset on any inconclusive
+    // round), not "I saw one strong tally." This is the contract the engine's own
+    // integration test asserts ("ONLY because wave decided Accept do we certify").
+    if (!voted_[pos.block_id] && d == Decision::Accept) {
         const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
         SignedVote v;
         v.block_id = pos.block_id;
