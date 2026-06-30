@@ -1,2 +1,7 @@
 build/
+build-*/
 scratch/
+proofs/*.aux
+proofs/*.log
+proofs/*.out
+proofs/*.pdf

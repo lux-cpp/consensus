@@ -20,6 +20,12 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Sanitizers, scoped to consensus2's OWN code (the gate + Node + tests) — NOT the
+# reused blst/bls_signature, which is audited assembly crypto we keep unmodified
+# and whose instrumentation is both forbidden by policy and pathologically slow.
+# Usage:  -DCONSENSUS2_SANITIZE=address,undefined   or   -DCONSENSUS2_SANITIZE=thread
+set(CONSENSUS2_SANITIZE "" CACHE STRING "Sanitizer set for consensus2 code only (e.g. address,undefined | thread)")
+
 # Locate the reused luxcpp assets (default: the parent of this seed dir).
 get_filename_component(_default_luxcpp "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
 set(LUXCPP_ROOT "${_default_luxcpp}" CACHE PATH "Path to the luxcpp checkout root")
@@ -79,6 +85,22 @@ target_link_libraries(batch_verify_attack_test PRIVATE consensus2)
 target_compile_options(batch_verify_attack_test PRIVATE -Wall -Wextra)
 add_test(NAME batch_verify_attack COMMAND batch_verify_attack_test)
 
+# ── BFT parity gap tests: agreement (no double finalize), liveness, acceptance window
+add_executable(no_double_finalize_test test/no_double_finalize_test.cpp)
+target_link_libraries(no_double_finalize_test PRIVATE consensus2)
+target_compile_options(no_double_finalize_test PRIVATE -Wall -Wextra)
+add_test(NAME no_double_finalize COMMAND no_double_finalize_test)
+
+add_executable(liveness_test test/liveness_test.cpp)
+target_link_libraries(liveness_test PRIVATE consensus2)
+target_compile_options(liveness_test PRIVATE -Wall -Wextra)
+add_test(NAME liveness COMMAND liveness_test)
+
+add_executable(out_of_turn_test test/out_of_turn_test.cpp)
+target_link_libraries(out_of_turn_test PRIVATE consensus2)
+target_compile_options(out_of_turn_test PRIVATE -Wall -Wextra)
+add_test(NAME out_of_turn COMMAND out_of_turn_test)
+
 # ZAP vote transport — votes over the canonical ZAP wire codec (zap-cpp-core).
 # Gated on -DZAP_DIR (the zap-cpp-core include root); core consensus2 has no ZAP dep.
 if (ZAP_DIR)
@@ -87,4 +109,21 @@ if (ZAP_DIR)
     target_link_libraries(zap_vote_transport_test PRIVATE consensus2)
     target_compile_options(zap_vote_transport_test PRIVATE -Wall -Wextra)
     add_test(NAME zap_vote_transport COMMAND zap_vote_transport_test)
+endif()
+
+# Apply the requested sanitizer to consensus2's OWN targets only (blst/bls stay
+# clean — see CONSENSUS2_SANITIZE above). One place; every consensus2 target gets
+# the same instrumentation, the reused crypto none.
+if (CONSENSUS2_SANITIZE)
+    set(_c2_san -fsanitize=${CONSENSUS2_SANITIZE} -fno-omit-frame-pointer)
+    set(_c2_targets consensus2 toy_stub_killer_test poll_driver_test
+        engine_integration_test multi_node_test batch_verify_attack_test
+        no_double_finalize_test liveness_test out_of_turn_test)
+    if (ZAP_DIR)
+        list(APPEND _c2_targets zap_vote_transport_test)
+    endif()
+    foreach(_t ${_c2_targets})
+        target_compile_options(${_t} PRIVATE ${_c2_san})
+        target_link_options(${_t} PRIVATE ${_c2_san})
+    endforeach()
 endif()

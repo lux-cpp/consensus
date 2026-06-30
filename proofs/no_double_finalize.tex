@@ -1,0 +1,198 @@
+% Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
+% SPDX-License-Identifier: BSD-3-Clause-Eco
+%
+% Safety + liveness of the consensus2 leaderless BLS quorum-certificate finality
+% gate, and the honest non-equivocation discipline the Node enforces. This proof
+% ships WITH the consensus-rule change that introduced the (height,epoch) slot
+% guard (src/node.cpp), per the proposer-fallback acceptance standard.
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage[margin=1in]{geometry}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{definition}{Definition}
+\newtheorem{corollary}{Corollary}
+
+\title{Agreement and Liveness of the \texttt{consensus2} Leaderless\\
+       BLS Quorum-Certificate Finality Gate}
+\author{Lux Industries --- consensus2 / node2}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Model}
+
+Let $V=\{v_1,\dots,v_n\}$ be a fixed validator set, each $v_i$ holding a distinct
+BLS12-381 key pair (POP ciphersuite, proof-of-possession verified at admission) and
+an integer stake $w_i>0$. Write $W=\sum_i w_i$ for the total stake. For a set
+$S\subseteq V$ let $w(S)=\sum_{v_i\in S} w_i$.
+
+A \emph{position} is a triple $p=(b,h,e)$: a $32$-byte block id $b$, a height $h$,
+and an epoch $e$. Two positions $p,p'$ are \emph{conflicting siblings} when
+$h=h'$, $e=e'$, and $b\neq b'$. The canonical signed message
+$\mu(p)$ is a domain-separated, fixed-width encoding of $p$ together with the
+protocol tag, version, role, and the $\texttt{accept}=\mathtt{0x01}$ byte
+(\texttt{quorum\_cert\_engine.cpp}, \texttt{canonical\_vote\_message}); distinct
+positions yield distinct messages, and a signature over $\mu(p)$ verifies for no
+$p'\neq p$.
+
+\paragraph{Finality rule (one rule, one place).}
+Fix the distinct-voter floor $\alpha\in\{1,\dots,n\}$. A position $p$
+\emph{finalizes} at a gate exactly when a set $Q\subseteq V$ of voters satisfies all
+three of:
+\begin{enumerate}
+  \item[(C)] $|Q|\ge\alpha$ \hfill (count floor);
+  \item[(S)] $w(Q) > \big\lfloor \tfrac{2}{3}W \big\rfloor$ \hfill (strict $2/3$ stake supermajority);
+  \item[(V)] every $v_i\in Q$ produced a BLS signature $\sigma_i$ with
+        $\mathrm{Verify}(pk_i,\mu(p),\sigma_i)=1$ \hfill (cryptographic verification).
+\end{enumerate}
+There is no $k{=}1$, \texttt{ForceAccept}, or count-only path; $W=0$ or an unopened
+position never finalizes (fail-closed). The floor $\lfloor 2W/3\rfloor$ is computed
+without overflow, byte-identical to the Go reference \texttt{TwoThirdsStakeFloor}.
+
+\paragraph{Adversary.}
+A subset $B\subseteq V$ of validators is Byzantine; let $f=w(B)$ be its stake. The
+adversary controls $B$'s keys (it may sign any message, including conflicting
+siblings) and the network schedule. Honest validators $H=V\setminus B$ follow the
+protocol. We assume the standard BFT bound $f < W/3$, i.e. $f \le \lfloor (W-1)/3\rfloor$.
+The BLS scheme is EUF-CMA, so the adversary cannot forge a signature for a key it
+does not control; condition (V) therefore counts only genuine signatures.
+
+\paragraph{Honest discipline (the non-equivocation rule).}
+Each honest validator signs $\texttt{accept}$ for \emph{at most one} position per
+slot $(h,e)$. This is enforced in \texttt{src/node.cpp}: the map
+$\texttt{committed\_slot\_}:(h,e)\mapsto b$ records the unique block a node has
+signed at a slot; a $\beta$-confirmed \textsc{Accept} for a \emph{different} block at
+an already-committed slot is refused. Formally:
+
+\begin{definition}[Honest non-equivocation]\label{def:nonequiv}
+For every honest $v_i\in H$ and every slot $(h,e)$, the set of block ids $b$ for
+which $v_i$ ever emits a valid signature over $\mu((b,h,e))$ has size at most one.
+\end{definition}
+
+\section{Agreement (no double finalize)}
+
+The naive ``two $>\!2/3$ quorums intersect in $>\!1/3$ stake, which must contain an
+honest validator'' argument is \emph{too weak} here: with $W=100$ the strict floor
+gives intersection $\ge 2\lfloor 2W/3\rfloor - W + 1 = 33$, which does not strictly
+exceed $W/3=33.\overline{3}$, so it cannot by itself exclude an all-Byzantine
+intersection at $f=33$. The correct argument uses honest \emph{disjointness} (the
+non-equivocation discipline) directly, with the strict integer stake bound.
+
+\begin{lemma}[Honest mass of a finalizing quorum]\label{lem:mass}
+If a quorum $Q$ finalizes a position (meets (S) and (V)), then its honest voters
+carry stake $w(Q\cap H) \ge \lfloor 2W/3\rfloor + 1 - f$.
+\end{lemma}
+\begin{proof}
+(S) is a strict integer inequality, so $w(Q)\ge \lfloor 2W/3\rfloor + 1$. The
+Byzantine voters in $Q$ carry at most $w(B)=f$, so
+$w(Q\cap H)=w(Q)-w(Q\cap B)\ge \lfloor 2W/3\rfloor + 1 - f$. By (V) every counted
+voter signed genuinely, so $Q\cap H$ are honest validators that actually signed.
+\end{proof}
+
+\begin{theorem}[Agreement]\label{thm:agree}
+If $f\le\lfloor (W-1)/3\rfloor$ (i.e.\ $f<W/3$), no two conflicting sibling positions
+$p_1=(b_1,h,e)$ and $p_2=(b_2,h,e)$ both finalize.
+\end{theorem}
+\begin{proof}
+Suppose both finalize with verified quorums $Q_1,Q_2$. Let $H_i=Q_i\cap H$. By
+Definition~\ref{def:nonequiv} an honest validator signs at most one of the siblings,
+so $H_1\cap H_2=\varnothing$ and therefore
+\[
+  w(H_1)+w(H_2)\;=\;w(H_1\cup H_2)\;\le\;w(H)\;=\;W-f .
+\]
+By Lemma~\ref{lem:mass}, $w(H_i)\ge \lfloor 2W/3\rfloor + 1 - f$ for $i=1,2$, hence
+\[
+  W-f \;\ge\; w(H_1)+w(H_2) \;\ge\; 2\big(\lfloor 2W/3\rfloor + 1 - f\big)
+  \;\;\Longrightarrow\;\; f \;\ge\; 2\lfloor 2W/3\rfloor + 2 - W .
+\]
+Write $W=3q+r$, $r\in\{0,1,2\}$, so $\lfloor 2W/3\rfloor = 2q+[\,r{=}2\,]$ and the
+right-hand side equals $q+2$ for $r\in\{0,2\}$ and $q+1$ for $r=1$. In every case it
+exceeds $\lfloor (W-1)/3\rfloor$ (which is $q-1,\,q,\,q$ for $r=0,1,2$). Thus
+$f\ge 2\lfloor 2W/3\rfloor+2-W > \lfloor (W-1)/3\rfloor \ge f$, a contradiction.
+Hence at most one sibling finalizes.
+\end{proof}
+
+\begin{theorem}[Tightness]\label{thm:tight}
+If $f\ge 2\lfloor 2W/3\rfloor + 2 - W$ (the smallest Byzantine stake the bound in
+Theorem~\ref{thm:agree} admits, which is $\le\lceil W/3\rceil$), the adversary
+\emph{can} finalize two conflicting siblings. The threshold is therefore exact and
+equals avalanche's $f<n/3$.
+\end{theorem}
+\begin{proof}
+The construction saturates the inequalities of Theorem~\ref{thm:agree}: $f$
+equivocators sign both siblings, and the honest stake $W-f$ is split into two
+disjoint sets $H_1,H_2$ with $w(H_i)=\lfloor 2W/3\rfloor + 1 - f$ each, which is
+feasible exactly when $2(\lfloor 2W/3\rfloor+1-f)\le W-f$, i.e.\ when
+$f\ge 2\lfloor 2W/3\rfloor+2-W$. Then $w(Q_i)=f+w(H_i)=\lfloor 2W/3\rfloor+1>
+\lfloor 2W/3\rfloor$ and $|Q_i|\ge\alpha$, so both finalize. The witness is realized
+concretely in \texttt{test/no\_double\_finalize\_test.cpp} scenario [1]: $W=100$
+(uniform $w_i=10$), $\alpha=7$, so $2\lfloor 2W/3\rfloor+2-W=34$; $f=4$ equivocators
+($40\ge 34$ stake) with a $3/3$ honest split finalize both branches, while
+\emph{every} honest split at $f=3$ ($30<34$ stake; exhaustively enumerated)
+finalizes at most one.
+\end{proof}
+
+\section{Liveness (route around faults)}
+
+Let the \emph{non-contributors} for a proposed block $p$ be $N\subseteq V$: every
+validator that is down (silent) or wedged (emits no valid \textsc{accept} for $p$),
+together with all Byzantine validators (who, worst case, withhold support for $p$).
+The live honest contributors are $L=H\setminus N$.
+
+\begin{theorem}[Liveness]\label{thm:live}
+If the live honest contributors satisfy $|L|\ge\alpha$ and $w(L)>\lfloor 2W/3\rfloor$
+(equivalently $w(N) < W-\lfloor 2W/3\rfloor=\lceil W/3\rceil$), and they all
+$\beta$-confirm $p$, then $p$ finalizes on every honest gate using only the votes of
+$L$ --- no input from $N$ is required.
+\end{theorem}
+\begin{proof}
+$L$ meets all three finality conditions: (C) by $|L|\ge\alpha$; (S) by
+$w(L)>\lfloor 2W/3\rfloor$; (V) because each $v_i\in L$ is honest and signs $\mu(p)$
+genuinely. Since the rule is monotone (adding the missing $N$ votes can only keep a
+position final), $L$ alone certifies $p$: a down or wedged validator is routed
+around, never waited on. A wedged validator that floods \emph{garbage} (bad-signature
+votes, or votes for an unopened position) is harmless: such inputs fail (V) or are
+rejected before collection, so they are evicted at the quorum check and never join a
+finalizing $Q$ (\texttt{quorum\_cert\_engine.cpp}: batch verify $+$
+\texttt{evict\_invalid}). Combined with Theorem~\ref{thm:agree}, when
+$w(N)<\lceil W/3\rceil$ the protocol both makes progress and forks nowhere ---
+self-healing across heights without manual intervention.
+\end{proof}
+
+\noindent The concrete instantiation $W=100$, $w_i=10$, $\alpha=7$ gives
+$\lfloor 2W/3\rfloor=66$: $|L|=7$ live ($70>66$) finalizes with $3$ down; $|L|=6$
+($60\le 66$) safely stalls (no fork) --- the boundary of Theorem~\ref{thm:live},
+witnessed in \texttt{test/liveness\_test.cpp} and, over real TCP, in
+\texttt{node2/test/node2\_liveness\_test.cpp}.
+
+\section{Acceptance window}
+
+The leaderless gate has no proposer ``turn''. Eligibility degenerates to: (i) a
+position collects votes only after \texttt{submit} opens it
+(\texttt{RejectedNoSuchBlock} otherwise --- no early acceptance), and (ii) every vote
+and cert binds $\mu(p)=(b,h,e,\dots)$, so a stale/cross-position signature is not
+liftable (it fails (V)). Out-of-set, forged, stale, sub-quorum, and tampered inputs
+all fail one of (C),(S),(V); cert re-verification (\texttt{verify\_cert}) recomputes
+(C),(S) from the authoritative set and checks the aggregate signature, never trusting
+cert-carried fields. See \texttt{test/out\_of\_turn\_test.cpp}. A future node2
+proposer schedule adds a deterministic eligible-proposer predicate \emph{on top of}
+these invariants; it does not change them.
+
+\section{Relation to avalanche}
+
+The gate \emph{extends} the avalanche/snow family without weakening it: the liveness/
+preference layer (\texttt{photon} sampling $+$ \texttt{wave}/focus $\beta$-confidence,
+ported from \texttt{luxfi/consensus}) decides \emph{which} block honest validators
+prefer, exactly as snowball does; the cryptographic finality (a signed $>2/3$-stake
+quorum certificate) replaces the implicit ``$k$ consecutive polls'' commit with an
+explicit, portable, post-quantum-upgradeable witness. Theorems~\ref{thm:agree}
+and~\ref{thm:live} reproduce avalanche's $f<n/3$ safety and liveness on the stake
+metric; Theorem~\ref{thm:tight} shows the threshold is identical, not merely
+sufficient. The PQ extension (Pulsar / Corona / Magnetar) changes only the contents
+of condition (V) --- the signature scheme verified per voter --- leaving (C),(S), the
+non-equivocation discipline, and all three theorems unchanged.
+
+\end{document}
