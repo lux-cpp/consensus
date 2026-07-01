@@ -21,7 +21,6 @@ Node::Node(std::uint32_t index,
 void Node::submit(const VotePosition & pos) {
     if (positions_.count(pos.block_id)) return;
     positions_[pos.block_id] = pos;
-    voted_[pos.block_id] = false;
     gate_.submit(pos);
 }
 
@@ -29,22 +28,36 @@ Decision Node::poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t t
     if (!positions_.count(pos.block_id)) return Decision::Undecided;
     // wave is keyed on the FULL block id (red M4) — no lossy handle.
     const Decision d = wave_.record_round(pos.block_id, yes, total);
+    if (d != Decision::Accept) return d;
 
-    // Sign ONLY once wave reaches its β-confirmed ACCEPT decision — never on a
-    // single transient round (red C1). A validator's BLS vote is an irrevocable
-    // contribution to a >2/3-stake finality cert; it must carry the full FPC
-    // confidence (β consecutive α-supermajority rounds, reset on any inconclusive
-    // round), not "I saw one strong tally." This is the contract the engine's own
-    // integration test asserts ("ONLY because wave decided Accept do we certify").
-    if (!voted_[pos.block_id] && d == Decision::Accept) {
-        const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
-        SignedVote v;
-        v.block_id = pos.block_id;
-        v.voter = pk_;
-        if (cevm::crypto::bls::sign(sk_.data(), msg.data(), msg.size(), v.sig.data()) == 0) {
-            voted_[pos.block_id] = true;
-            tx_.broadcast(v);  // disseminate; the bus echoes back, gate dedups
-        }
+    // TWO guards gate the irrevocable ACCEPT signature:
+    //
+    //  (1) β-confirmation (red C1): we sign only on the wave's β-confirmed ACCEPT
+    //      decision, never on a single transient round. A BLS vote is an
+    //      irrevocable contribution to a >2/3-stake finality cert; it must carry
+    //      full FPC confidence (β consecutive α-supermajority rounds, reset on any
+    //      inconclusive round). The `d == Accept` above is that decision.
+    //
+    //  (2) NON-EQUIVOCATION (the safety rule): an honest validator commits AT MOST
+    //      ONE block per (height,epoch) slot. If we have already ACCEPT-signed a
+    //      DIFFERENT block at this slot, we REFUSE to sign this sibling — signing
+    //      both would place this node's stake in two conflicting quorums and break
+    //      the quorum-intersection argument that gives f < n/3 safety
+    //      (proofs/no_double_finalize.tex). If we already signed THIS block, the
+    //      re-broadcast is suppressed (idempotent). Only a slot we have never
+    //      committed proceeds to sign.
+    const SlotKey slot{pos.height, pos.epoch};
+    const auto it = committed_slot_.find(slot);
+    if (it != committed_slot_.end()) return d;  // already committed at this slot
+                                                 // (same block: idempotent; sibling: refused)
+
+    const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
+    SignedVote v;
+    v.block_id = pos.block_id;
+    v.voter = pk_;
+    if (cevm::crypto::bls::sign(sk_.data(), msg.data(), msg.size(), v.sig.data()) == 0) {
+        committed_slot_.emplace(slot, pos.block_id);  // bind this slot to this block
+        tx_.broadcast(v);  // disseminate; the bus echoes back, gate dedups
     }
     return d;
 }

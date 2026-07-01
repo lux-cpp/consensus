@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace lux::consensus2 {
@@ -54,9 +55,11 @@ public:
     // Register a block this node will participate in deciding.
     void submit(const VotePosition & pos);
 
-    // Feed one sampled poll tally. When this node first observes an ACCEPT
-    // supermajority (yes ≥ wave threshold) it signs and broadcasts its ACCEPT
-    // vote exactly once. Returns this node's current wave decision.
+    // Feed one sampled poll tally. When this node's wave reaches its β-confirmed
+    // ACCEPT decision it signs and broadcasts its ACCEPT vote exactly once — AND
+    // only if it has not already committed a DIFFERENT block at this (height,epoch)
+    // slot. That second guard is the honest non-equivocation rule a BFT safety
+    // proof depends on (see SlotKey below). Returns this node's wave decision.
     Decision poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t total);
 
     // Receive a peer's signed vote into the safety gate (verified + deduped there).
@@ -68,6 +71,16 @@ public:
     std::uint32_t index() const { return index_; }
 
 private:
+    // A consensus slot — the (height, epoch) an honest validator may commit AT
+    // MOST ONE block to. Two distinct block ids sharing a SlotKey are conflicting
+    // siblings; signing ACCEPT for both is equivocation, which an honest node must
+    // never do. This is the discipline the quorum-intersection safety proof relies
+    // on: with every honest validator's stake in at most one quorum per slot, two
+    // conflicting >2/3-stake certs would have to share an intersection of >1/3
+    // stake of DOUBLE-voters — necessarily Byzantine. Hence f < n/3 ⇒ no two
+    // conflicting blocks finalize at one height (proofs/no_double_finalize.tex).
+    using SlotKey = std::pair<std::uint64_t /*height*/, std::uint64_t /*epoch*/>;
+
     std::uint32_t index_;
     std::array<std::uint8_t, 32> sk_;
     PubKey pk_;
@@ -76,7 +89,11 @@ private:
     VoteTransport & tx_;
 
     std::map<BlockId, VotePosition> positions_;
-    std::map<BlockId, bool> voted_;           // has this node broadcast its vote
+    // The single block this node has irrevocably ACCEPT-signed at each slot. Its
+    // presence means "already voted" (idempotent re-broadcast guard); a lookup
+    // that finds a DIFFERENT block id is the non-equivocation refusal. One concept
+    // replaces the old per-block_id `voted_` flag: "what did I commit at this slot".
+    std::map<SlotKey, BlockId> committed_slot_;
 };
 
 }  // namespace lux::consensus2
