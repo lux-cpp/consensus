@@ -2,9 +2,11 @@
 % SPDX-License-Identifier: BSD-3-Clause-Eco
 %
 % Safety + liveness of the consensus2 leaderless BLS quorum-certificate finality
-% gate, and the honest non-equivocation discipline the Node enforces. This proof
-% ships WITH the consensus-rule change that introduced the (height,epoch) slot
-% guard (src/node.cpp), per the proposer-fallback acceptance standard.
+% gate, and the honest non-equivocation discipline the Node enforces. The slot is a
+% HEIGHT (not (height,epoch)): the epoch is a proposer-chosen axis and must not
+% fragment the equivocation slot. Non-equivocation is made durable across a height's
+% whole life by a monotonic decided-height frontier + strictly-below GC (src/node.cpp),
+% closing the prune-then-resign fork; per the proposer-fallback acceptance standard.
 \documentclass[11pt]{article}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage[margin=1in]{geometry}
@@ -31,12 +33,15 @@ $S\subseteq V$ let $w(S)=\sum_{v_i\in S} w_i$.
 
 A \emph{position} is a triple $p=(b,h,e)$: a $32$-byte block id $b$, a height $h$,
 and an epoch $e$. Two positions $p,p'$ are \emph{conflicting siblings} when
-$h=h'$, $e=e'$, and $b\neq b'$. The canonical signed message
+$h=h'$ and $b\neq b'$ --- \emph{any} two distinct blocks at one height, regardless of
+their epochs. The canonical signed message
 $\mu(p)$ is a domain-separated, fixed-width encoding of $p$ together with the
 protocol tag, version, role, and the $\texttt{accept}=\mathtt{0x01}$ byte
 (\texttt{quorum\_cert\_engine.cpp}, \texttt{canonical\_vote\_message}); distinct
 positions yield distinct messages, and a signature over $\mu(p)$ verifies for no
-$p'\neq p$.
+$p'\neq p$. The epoch $e$ is folded into $\mu(p)$ (and re-checked by
+\texttt{verify\_cert}) purely for anti-replay / cross-epoch binding; it is \emph{not}
+a slot axis (see the honest discipline below).
 
 \paragraph{Finality rule (one rule, one place).}
 Fix the distinct-voter floor $\alpha\in\{1,\dots,n\}$. A position $p$
@@ -61,16 +66,50 @@ The BLS scheme is EUF-CMA, so the adversary cannot forge a signature for a key i
 does not control; condition (V) therefore counts only genuine signatures.
 
 \paragraph{Honest discipline (the non-equivocation rule).}
-Each honest validator signs $\texttt{accept}$ for \emph{at most one} position per
-slot $(h,e)$. This is enforced in \texttt{src/node.cpp}: the map
-$\texttt{committed\_slot\_}:(h,e)\mapsto b$ records the unique block a node has
-signed at a slot; a $\beta$-confirmed \textsc{Accept} for a \emph{different} block at
-an already-committed slot is refused. Formally:
+The slot is a \emph{height} $h$ --- \textbf{not} $(h,e)$. Each honest validator signs
+$\texttt{accept}$ for \emph{at most one} block per height, across its entire execution.
+This is enforced in \texttt{src/node.cpp} by two guards, evaluated before signing:
+\begin{itemize}
+  \item \textbf{per-height slot:} the map $\texttt{committed\_slot\_}:h\mapsto b$ records
+        the unique block a node has signed at height $h$; a $\beta$-confirmed
+        \textsc{Accept} for a \emph{different} block at an already-committed height is
+        refused (a re-solicit of the same block is idempotent).
+  \item \textbf{decided-height gate:} a monotonic frontier $\texttt{final\_through\_}$
+        marks every height $\le$ it as decided; a $\beta$-confirmed \textsc{Accept} at a
+        decided height is refused. This is the analogue of avalanche's
+        $\texttt{lastAcceptedHeight}$ frontier (\texttt{topological.go}), where a decided
+        height's siblings are removed from the tree and their votes dropped.
+\end{itemize}
+
+\paragraph{Why height, not $(h,e)$ (the durable invariant).}
+Keying the slot on $(h,e)$ \emph{fragments} it: two honest sibling blocks at one height
+can carry \emph{different} epochs --- a bare / pre-fork block and a proposervm-wrapped
+block report different underlying P-chain heights, and $e$ is derived from that
+proposer-chosen value, not from the finalized value-chain prefix. Under an $(h,e)$ slot an
+honest validator could commit \emph{both} siblings (one per $(h,e)$), and two
+$>\!2/3$-stake certs would finalize at one height. So the epoch is a proposer-controlled
+axis and must never key the equivocation slot; it survives only inside $\mu(p)$ and the
+cert. The height-only slot matches the Go reference exactly (\texttt{engine/chain}
+\texttt{SlotKey\{Height\}}, \texttt{reserveSlotForSign}). Formally:
 
 \begin{definition}[Honest non-equivocation]\label{def:nonequiv}
-For every honest $v_i\in H$ and every slot $(h,e)$, the set of block ids $b$ for
-which $v_i$ ever emits a valid signature over $\mu((b,h,e))$ has size at most one.
+For every honest $v_i\in H$ and every height $h$, the set of block ids $b$ for which
+$v_i$ ever emits a valid signature over $\mu((b,h,\cdot))$ has size at most one.
 \end{definition}
+
+\paragraph{Slot lifecycle (no prune-then-resign).}
+$\texttt{committed\_slot\_}$ is garbage-collected only \emph{strictly below} the monotonic
+$\texttt{final\_through\_}$ frontier (\texttt{Node::mark\_finalized\_through}), so the
+just-decided height's binding is retained as a second in-memory belt and every lower
+binding is reclaimed to bound memory. Crucially, GC \emph{cannot} re-enable a signature:
+a height at or below the frontier is refused by the decided-height gate whether or not its
+slot still exists. Hence Definition~\ref{def:nonequiv} holds across the \emph{entire} run,
+not merely while a slot object lives --- closing the ``prune-then-resign'' fork in which an
+inclusive prune deleted the decided height's slot and a late, differently-enveloped sibling
+(one the DAG reject could not reach, because it hangs off a different outer parent) then
+collected a validator's \emph{second} signature at that height. The frontier is
+reconstructed from the last-accepted head on restart, so the refusal is durable across a
+crash; a lower frontier value never regresses it (monotone).
 
 \section{Agreement (no double finalize)}
 
@@ -94,12 +133,14 @@ voter signed genuinely, so $Q\cap H$ are honest validators that actually signed.
 
 \begin{theorem}[Agreement]\label{thm:agree}
 If $f\le\lfloor (W-1)/3\rfloor$ (i.e.\ $f<W/3$), no two conflicting sibling positions
-$p_1=(b_1,h,e)$ and $p_2=(b_2,h,e)$ both finalize.
+$p_1=(b_1,h,e_1)$ and $p_2=(b_2,h,e_2)$ with $b_1\neq b_2$ (same height, arbitrary
+epochs) both finalize.
 \end{theorem}
 \begin{proof}
 Suppose both finalize with verified quorums $Q_1,Q_2$. Let $H_i=Q_i\cap H$. By
-Definition~\ref{def:nonequiv} an honest validator signs at most one of the siblings,
-so $H_1\cap H_2=\varnothing$ and therefore
+Definition~\ref{def:nonequiv} an honest validator signs at most one block at height $h$
+(regardless of epoch), hence at most one of $b_1,b_2$; so $H_1\cap H_2=\varnothing$ and
+therefore
 \[
   w(H_1)+w(H_2)\;=\;w(H_1\cup H_2)\;\le\;w(H)\;=\;W-f .
 \]

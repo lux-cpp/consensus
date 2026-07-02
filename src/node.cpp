@@ -30,7 +30,7 @@ Decision Node::poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t t
     const Decision d = wave_.record_round(pos.block_id, yes, total);
     if (d != Decision::Accept) return d;
 
-    // TWO guards gate the irrevocable ACCEPT signature:
+    // THREE guards gate the irrevocable ACCEPT signature:
     //
     //  (1) β-confirmation (red C1): we sign only on the wave's β-confirmed ACCEPT
     //      decision, never on a single transient round. A BLS vote is an
@@ -38,17 +38,26 @@ Decision Node::poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t t
     //      full FPC confidence (β consecutive α-supermajority rounds, reset on any
     //      inconclusive round). The `d == Accept` above is that decision.
     //
-    //  (2) NON-EQUIVOCATION (the safety rule): an honest validator commits AT MOST
-    //      ONE block per (height,epoch) slot. If we have already ACCEPT-signed a
-    //      DIFFERENT block at this slot, we REFUSE to sign this sibling — signing
-    //      both would place this node's stake in two conflicting quorums and break
-    //      the quorum-intersection argument that gives f < n/3 safety
-    //      (proofs/no_double_finalize.tex). If we already signed THIS block, the
-    //      re-broadcast is suppressed (idempotent). Only a slot we have never
-    //      committed proceeds to sign.
-    const SlotKey slot{pos.height, pos.epoch};
+    //  (2) DECIDED-HEIGHT GATE (the durable, monotonic backstop): a height at or
+    //      below the decided frontier is settled — exactly one block was certified
+    //      there and its every sibling is permanently unsignable, as avalanchego's
+    //      acceptPreferredChild+rejectTransitively makes a decided height's siblings
+    //      unreachable and drops their votes. Never sign at a decided height. This
+    //      closes the prune-then-resign fork: even after a height's slot is GC'd, a
+    //      late/differently-enveloped sibling there can never collect this node's
+    //      SECOND signature. Mirrors Go reserveSlotForSign's finalized-height check.
+    //
+    //  (3) NON-EQUIVOCATION (per-height slot): an honest validator commits AT MOST
+    //      ONE block per HEIGHT. If we already ACCEPT-signed a DIFFERENT block at
+    //      this height, REFUSE this sibling — signing both would place this node's
+    //      stake in two conflicting quorums and break the quorum-intersection
+    //      argument that gives f < n/3 safety (proofs/no_double_finalize.tex). If we
+    //      already signed THIS block, the re-broadcast is suppressed (idempotent).
+    if (final_through_ && pos.height <= *final_through_) return d;  // (2) decided height
+
+    const SlotKey slot = pos.height;
     const auto it = committed_slot_.find(slot);
-    if (it != committed_slot_.end()) return d;  // already committed at this slot
+    if (it != committed_slot_.end()) return d;  // (3) already committed at this height
                                                  // (same block: idempotent; sibling: refused)
 
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
@@ -56,10 +65,24 @@ Decision Node::poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t t
     v.block_id = pos.block_id;
     v.voter = pk_;
     if (cevm::crypto::bls::sign(sk_.data(), msg.data(), msg.size(), v.sig.data()) == 0) {
-        committed_slot_.emplace(slot, pos.block_id);  // bind this slot to this block
+        committed_slot_.emplace(slot, pos.block_id);  // bind this height to this block
         tx_.broadcast(v);  // disseminate; the bus echoes back, gate dedups
     }
     return d;
+}
+
+void Node::mark_finalized_through(std::uint64_t height) {
+    // Monotonic: a stale/lower frontier never regresses the decided frontier.
+    if (final_through_ && height <= *final_through_) return;
+    final_through_ = height;
+    // GC committed_slot_ STRICTLY BELOW the frontier — retain the tip's slot as an
+    // in-memory belt (the decided-height gate covers the frontier itself durably).
+    // Strictly-below is essential: an inclusive erase would delete the just-decided
+    // height's slot, and without the gate that reopened the prune-then-resign fork.
+    for (auto it = committed_slot_.begin(); it != committed_slot_.end();) {
+        if (it->first < height) it = committed_slot_.erase(it);
+        else ++it;
+    }
 }
 
 VoteResult Node::onVote(const SignedVote & v) {
