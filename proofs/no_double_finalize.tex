@@ -237,6 +237,109 @@ cert-carried fields. See \texttt{test/out\_of\_turn\_test.cpp}. A future node2
 proposer schedule adds a deterministic eligible-proposer predicate \emph{on top of}
 these invariants; it does not change them.
 
+\section{Round-scoped refinement (view-change): liveness under competing siblings}
+\label{sec:roundscoped}
+
+The height-only slot of Definition~\ref{def:nonequiv} makes the \emph{signature}
+irrevocable: an honest validator signs \textsc{accept} for at most one block per height
+\emph{across its entire execution}. This is what gives Agreement
+(Theorem~\ref{thm:agree}) --- but it is \emph{also} a liveness hazard when competing
+siblings appear at one height under a zero-margin quorum (the operational $415\!\to\!416$
+freeze). If honest validators bind their one signature to \emph{different} siblings ---
+which asynchronous, asymmetric gossip forces the moment the settle window is shorter than
+the sibling-propagation delay --- no sibling reaches $\alpha$, and the irrevocable rule
+forbids any validator from switching. The split is \emph{permanent}: a pure liveness
+deadlock with zero Byzantine faults. Formally, with $n$ honest validators exactly equal to
+$\alpha$ (one validator down), a single validator bound to a losing sibling makes $\alpha$
+unreachable forever.
+
+\paragraph{The refinement.}
+Replace the height-only irrevocable signature with a two-phase, round-scoped protocol
+(Tendermint/HotStuff view-change), \emph{keeping} the finality rule (C),(S),(V)
+unchanged. For each height $h$ run rounds $r=0,1,2,\dots$. Each validator maintains a
+lock $(\ell_r,\ell_b)\in(\mathbb{N}\times\mathrm{Id})\cup\{\bot\}$, initially $\bot$.
+\begin{itemize}
+  \item \textbf{Prevote (non-binding).} In round $r$ a validator casts \emph{one} signed
+        \textsc{prevote} (domain \texttt{LUX/chain/prevote/v1}, disjoint from
+        $\mu(p)$) for a target value. Prevotes are \emph{fluid}: a validator prevotes a
+        different value in a later round freely, subject only to the lock rule below.
+  \item \textbf{POL.} A \emph{proof-of-lock} $\mathrm{POL}(v,r)$ is a set of
+        $\ge\alpha$ distinct prevotes for value $v$ at round $r$. Because a validator
+        casts at most one prevote per $(h,r)$, at most one value attains $\ge\alpha$
+        prevotes per round (Lemma~\ref{lem:poluniq}): \emph{a POL is unique per round}.
+  \item \textbf{Precommit (binding = the (C),(S),(V) signature).} On observing
+        $\mathrm{POL}(v,r)$ at the current round, the validator casts its \textsc{accept}
+        signature over $\mu(v)$ and \textsc{locks} $(\ell_r,\ell_b)\gets(r,v)$. This is
+        the \emph{one} irrevocable cert vote, now scoped to $(h,r)$.
+  \item \textbf{Lock/unlock.} A locked validator prevotes $\ell_b$, and may prevote a
+        conflicting $v'\neq\ell_b$ in round $r'>r$ \emph{only} if it has observed
+        $\mathrm{POL}(v',r'')$ for some $r''>\ell_r$ (a fresher justification).
+  \item \textbf{Round-skip (liveness).} On observing prevotes/precommits from $\ge f{+}1$
+        \emph{distinct} validators at a round $r>$ its own, at least one is honest and
+        genuinely ahead, so the validator jumps to round $r$. This re-aligns a validator
+        left phase-offset by asymmetric gossip (the residual freeze).
+\end{itemize}
+
+\begin{lemma}[POL uniqueness]\label{lem:poluniq}
+For any height $h$ and round $r$, at most one value $v$ satisfies
+$|\{\text{honest prevotes for }v\text{ at }(h,r)\}|+f_{\mathrm{cnt}}\ge\alpha$, where
+$f_{\mathrm{cnt}}\le f$ is the Byzantine count. Two values each reaching $\alpha$ prevotes
+would need $\ge 2\alpha-n$ validators prevoting both at round $r$; honest validators cast
+one prevote per $(h,r)$, so those are Byzantine, requiring $2\alpha-n\le f$. Under the
+$\alpha$-bound $2\alpha-n>f$ this is impossible. $\qed$
+\end{lemma}
+
+\begin{theorem}[Agreement, round-scoped]\label{thm:agree-rs}
+Under $2\alpha-n>f$ (equivalently on the stake metric $2w(\text{quorum})-W>f$), no two
+conflicting siblings both finalize at one height. \emph{Proof sketch.} A value $v$
+finalizes only via $\ge\alpha$ precommits at a common round $r$; by the precommit rule
+each such signer holds a lock $(\,\ge r? ,v)$ formed on $\mathrm{POL}(v,r)$. For a
+conflicting $v'$ to finalize at round $r'>r$, $\ge\alpha$ precommit $v'$, so
+$\mathrm{POL}(v',r')$ exists; the $\ge 2\alpha-n$ validators in both quorums are locked on
+$v$ at rounds $\le r$ and, by the lock rule, prevote $v'$ at $r'$ only with
+$\mathrm{POL}(v',r'')$, $r''>r$. Take the \emph{least} such $r^\star>r$: at $r^\star$,
+$\ge\alpha$ prevote $v'$, but $\ge 2\alpha-n>f$ of them are honest and locked on $v$ at
+rounds $<r^\star$ with no qualifying earlier POL --- contradiction. Hence no such $v'$
+finalizes; a single finalized value per height, preserving the guarantee of
+Theorem~\ref{thm:agree}. The round-scoping refines the slot from $h$ to $(h,r)$; the
+finality conditions (C),(S),(V) are unchanged. $\qed$
+\end{theorem}
+
+\begin{theorem}[Liveness, round-scoped]\label{thm:live-rs}
+Under eventual synchrony and $f<W/3$, every height finalizes. Prevotes are fluid, so a
+split round forms no POL and locks nobody (locking requires a POL); round-skip re-aligns
+lagging honest validators to a common round; all honest validators converge their prevote
+on the value carrying the highest-round POL (\emph{validValue}, computed from the shared
+gossiped tallies), so within $O(1)$ synchronous rounds $\ge\alpha$ prevote one value, a
+POL forms, they precommit, and (C),(S),(V) are met. A durable per-height
+\emph{lock round} (v3 vote-guard) lets a restarted validator re-converge rather than
+stall. $\qed$
+\end{theorem}
+
+\paragraph{Tightness.} The $\alpha$-bound $2\alpha-n>f$ is tight: at $2\alpha-n=f$
+(e.g. $n=5,\alpha=3,f=1$) a single equivocator sits in two disjoint $\alpha$-quorums and
+double-finalizes; the engine \emph{refuses} to run the view-change (fail-secure halt) on
+any committee failing the bound. This mirrors Theorem~\ref{thm:tight} on the round-scoped
+slot.
+
+\paragraph{Go\,$\leftrightarrow$\,C++ parity (delta).}
+The round-scoped view-change ships in the Go reference
+\texttt{luxfi/consensus} \texttt{v1.35.6} (\texttt{engine/chain/round\_view.go}:
+prevote/POL/lock/unlock/round-skip; \texttt{integration.go}: the driver + prevote
+gossip; \texttt{vote\_guard.go}: v3 lock-round persistence), \emph{opt-in} per network
+(\texttt{config.ViewChange}, default off; the legacy height-only path of
+\S\ref{sec:roundscoped} preamble is unchanged when off), and is proven there by an
+adversarial suite (an $f{=}1$ equivocator that double-prevotes and double-precommits every
+sibling at every round; $0/200$ non-uniform-visibility liveness; a storm under the race
+detector; the $\alpha{=}3$ tightness fork). \texttt{consensus2} currently implements the
+\emph{height-only} \texttt{committed\_slot\_} of \S\ref{sec:model} (\texttt{src/node.cpp}):
+Theorem~\ref{thm:agree} holds, but it is subject to the competing-sibling liveness
+deadlock above. Porting \texttt{round\_view.go} to a \texttt{round\_view.hpp/cpp} on top of
+the existing \texttt{wave} preference layer (whose confidence-reset-on-switch already
+models fluid preference) --- and wiring the prevote message into \texttt{Node} --- is the
+tracked follow-up to restore full Go$\leftrightarrow$C++ parity; Theorems~\ref{thm:agree-rs}
+and~\ref{thm:live-rs} are the specification it must satisfy.
+
 \section{Relation to avalanche}
 
 The gate \emph{extends} the avalanche/snow family without weakening it: the liveness/
