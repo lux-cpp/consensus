@@ -107,9 +107,24 @@ slot still exists. Hence Definition~\ref{def:nonequiv} holds across the \emph{en
 not merely while a slot object lives --- closing the ``prune-then-resign'' fork in which an
 inclusive prune deleted the decided height's slot and a late, differently-enveloped sibling
 (one the DAG reject could not reach, because it hangs off a different outer parent) then
-collected a validator's \emph{second} signature at that height. The frontier is
-reconstructed from the last-accepted head on restart, so the refusal is durable across a
-crash; a lower frontier value never regresses it (monotone).
+collected a validator's \emph{second} signature at that height. A lower frontier value
+never regresses it (monotone).
+
+\paragraph{Durability across a restart.}
+The frontier must survive process restart, or a correlated rolling restart of a storming
+fresh net reopens the fork: the just-GC'd below-tip slots are gone and, on the Go node, the
+\emph{certified} ledger height is a non-authoritative $(0,\text{false})$ hint until the
+first post-restart certificate (incident-1082814 PART-A). The Go node (the authoritative
+durable path) therefore persists the decided-through floor in the same fsync'd write as the
+pruned slot set (\texttt{engine/chain/vote\_guard.go}, \texttt{finalizedThrough}) and
+re-seeds \texttt{reserveSlotForSign}'s floor from it on boot, folding in the
+\texttt{vm.LastAccepted} hint height as a complementary lower bound --- a SIGN-GATE-ONLY
+value that never enters \texttt{byHeight} or the authoritative finality ledger (PART-A
+preserved). The \texttt{consensus2} \texttt{Node} keeps \texttt{final\_through\_} in memory
+only; it is a pure library with no persistence layer, so its embedder (\texttt{node2}) MUST
+re-seed the frontier via \texttt{mark\_finalized\_through} from its own persisted decided
+height on boot before the node signs. With that boot-seed, Definition~\ref{def:nonequiv}
+holds across restarts as well.
 
 \section{Agreement (no double finalize)}
 
