@@ -71,10 +71,19 @@ public:
     // decided height's siblings unreachable. Monotonic (a lower value is ignored). The
     // caller — the finalization observer (node2 / the certifying layer) — invokes this
     // when a height is certified, mirroring Go acceptWithCertCore's prune. It (1) sets
-    // the frontier so poll() refuses any height <= it (the DURABLE gate), and (2) GCs
+    // the frontier so poll() refuses any height <= it (the sign gate), and (2) GCs
     // committed_slot_ entries STRICTLY BELOW `height`, retaining the tip's slot as a
     // second belt — bounding memory without ever opening a re-sign window. This is the
     // faithful mirror of the Go engine fix (prune strictly below + decided-height gate).
+    //
+    // DURABILITY IS THE EMBEDDER'S JOB. final_through_ is IN-MEMORY; this pure-library
+    // Node has no persistence layer. To survive a restart, the embedder (node2) MUST, on
+    // boot, call mark_finalized_through with its OWN persisted decided height BEFORE the
+    // node signs anything — otherwise a decided-below-tip height whose slot was GC'd would
+    // be re-signable across the restart (the cross-restart prune-then-resign fork). The Go
+    // node is the authoritative durable path: it persists the floor in an fsync'd
+    // vote-guard file and re-seeds it on boot (engine/chain vote_guard.go finalizedThrough
+    // + reserveSlotForSign's decidedFloor). See proofs/no_double_finalize.tex §Slot lifecycle.
     void mark_finalized_through(std::uint64_t height);
 
     bool isFinal(const BlockId & b) const { return gate_.is_final(b); }
@@ -118,8 +127,10 @@ private:
     // did I commit at this height". GC'd STRICTLY BELOW the decided frontier only.
     std::map<SlotKey, BlockId> committed_slot_;
     // The decided-height frontier: every height <= this is certified and permanently
-    // unsignable (the durable, monotonic backstop that closes the prune-then-resign
-    // fork). Unset until the first mark_finalized_through. Mirrors Go GetFinalizedHeight.
+    // unsignable (the monotonic backstop that closes the prune-then-resign fork). Unset
+    // until the first mark_finalized_through. IN-MEMORY only — the embedder must re-seed
+    // it on boot from its persisted decided height (see mark_finalized_through). Mirrors
+    // Go's decidedFloor, whose durability comes from the fsync'd vote-guard file.
     std::optional<std::uint64_t> final_through_;
 };
 

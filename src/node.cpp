@@ -38,14 +38,18 @@ Decision Node::poll(const VotePosition & pos, std::uint32_t yes, std::uint32_t t
     //      full FPC confidence (β consecutive α-supermajority rounds, reset on any
     //      inconclusive round). The `d == Accept` above is that decision.
     //
-    //  (2) DECIDED-HEIGHT GATE (the durable, monotonic backstop): a height at or
-    //      below the decided frontier is settled — exactly one block was certified
-    //      there and its every sibling is permanently unsignable, as avalanchego's
+    //  (2) DECIDED-HEIGHT GATE (the monotonic backstop): a height at or below the
+    //      decided frontier is settled — exactly one block was certified there and its
+    //      every sibling is permanently unsignable, as avalanchego's
     //      acceptPreferredChild+rejectTransitively makes a decided height's siblings
     //      unreachable and drops their votes. Never sign at a decided height. This
     //      closes the prune-then-resign fork: even after a height's slot is GC'd, a
     //      late/differently-enveloped sibling there can never collect this node's
-    //      SECOND signature. Mirrors Go reserveSlotForSign's finalized-height check.
+    //      SECOND signature. Mirrors Go reserveSlotForSign's decided-floor check.
+    //      NOTE: final_through_ is IN-MEMORY; durability across a restart is the
+    //      embedder's responsibility — node2 must re-seed it via mark_finalized_through
+    //      from its persisted decided height on boot (the Go node persists it in the
+    //      fsync'd vote-guard file). See node.hpp / no_double_finalize.tex.
     //
     //  (3) NON-EQUIVOCATION (per-height slot): an honest validator commits AT MOST
     //      ONE block per HEIGHT. If we already ACCEPT-signed a DIFFERENT block at
