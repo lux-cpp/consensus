@@ -83,7 +83,11 @@ public:
     // be re-signable across the restart (the cross-restart prune-then-resign fork). The Go
     // node is the authoritative durable path: it persists the floor in an fsync'd
     // vote-guard file and re-seeds it on boot (engine/chain vote_guard.go finalizedThrough
-    // + reserveSlotForSign's decidedFloor). See proofs/no_double_finalize.tex §Slot lifecycle.
+    // + reserveSlotForSign's decidedFloor), and additionally seeds decidedFloor DIRECTLY
+    // from vm.LastAccepted at Start so an in-place upgrade from a floor-less legacy file is
+    // covered from the first instant of boot. The node2 embedder MUST likewise seed this
+    // frontier from max(persisted floor, last-accepted height) on boot before signing. See
+    // proofs/no_double_finalize.tex §Durability across a restart.
     void mark_finalized_through(std::uint64_t height);
 
     bool isFinal(const BlockId & b) const { return gate_.is_final(b); }
