@@ -41,15 +41,16 @@ struct VoteTransport {
 
 class Node {
 public:
-    // `epoch` is accepted for API symmetry; the epoch is bound per block in the
-    // VotePosition's canonical message, so the Node does not store it separately.
+    // The validator-set era a vote binds to travels IN the VotePosition
+    // (validator_set_root), not as Node construction state — mirroring Go, where the
+    // set/era is an axis of the signed position and epochHeight is a verify-time
+    // parameter, never a field of the signer. So there is no epoch ctor param.
     Node(std::uint32_t index,
          const std::array<std::uint8_t, 32> & sk,
          const PubKey & pk,
          std::vector<Validator> validator_set,
          std::uint32_t alpha,
          WaveConfig wave_cfg,
-         std::uint64_t epoch,
          VoteTransport & tx);
 
     // Register a block this node will participate in deciding.
@@ -105,15 +106,14 @@ private:
     // stake of DOUBLE-voters — necessarily Byzantine. Hence f < n/3 ⇒ no two
     // conflicting blocks finalize at one height (proofs/no_double_finalize.tex).
     //
-    // WHY HEIGHT-ONLY, NOT (height, epoch): an earlier revision keyed the slot on
-    // (height, epoch). That FRAGMENTS the slot — two honest sibling blocks at the SAME
-    // height can carry DIFFERENT epochs (a bare/pre-fork block reports one, a wrapped
-    // block another; the epoch derives from a proposer-chosen P-chain height, NOT from
-    // the finalized value-chain prefix), so an honest validator could commit BOTH
-    // siblings, one per (h,e) slot, and two α/⅔ certs would finalize at one height. The
-    // epoch is a proposer-controlled axis and MUST NOT key the equivocation slot. It
-    // still binds the SIGNED message and the cert (canonical_vote_message folds it, and
-    // verify_cert re-checks the position) for anti-cross-epoch-replay — it is removed
+    // WHY HEIGHT-ONLY, NOT (height, round/set-root/...): keying the slot on any axis
+    // BESIDES height FRAGMENTS it — two honest sibling blocks at the SAME height can
+    // differ on a proposer-/protocol-chosen axis (a re-proposal bumps `round`; a
+    // bare/pre-fork vs wrapped block commit under different `validator_set_root`s),
+    // so an honest validator could commit BOTH siblings, one per fragmented slot, and
+    // two α/⅔ certs would finalize at one height. Those axes still bind the SIGNED
+    // message and the cert (canonical_vote_message folds ALL of them, and verify_cert
+    // re-checks the whole position) for anti-cross-position-replay — they are removed
     // ONLY from the slot. This matches the Go reference (engine/chain SlotKey{Height}).
     using SlotKey = std::uint64_t;  // height
 

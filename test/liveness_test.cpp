@@ -57,8 +57,8 @@ Key make_key(std::uint8_t tag) {
     if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint64_t epoch) {
-    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.epoch = epoch; return p;
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height) {
+    VotePosition p{}; p.block_id.fill(tag); p.height = height; return p;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
@@ -90,7 +90,7 @@ int main() {
                           std::uint32_t live, const VotePosition& pos) {
         for (std::uint32_t i = 0; i < live; ++i)
             nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
-                                                   WaveConfig{5, 0.8, 4}, 1, bus));
+                                                   WaveConfig{5, 0.8, 4}, bus));
         for (auto& n : nodes) bus.subs.push_back(n.get());
         for (auto& n : nodes) n->submit(pos);
         for (int r = 0; r < 4; ++r) for (auto& n : nodes) n->poll(pos, 5, 5);  // β rounds
@@ -101,7 +101,7 @@ int main() {
         const int b = g_fail;
         // 3 of 10 down → 7 live (70 stake) finalize.
         Bus bus; std::vector<std::unique_ptr<Node>> nodes;
-        const VotePosition pos = make_pos(0x71, 100, 1);
+        const VotePosition pos = make_pos(0x71, 100);
         run_height(nodes, bus, /*live=*/7, pos);
         bool all_final = true, all_verify = true;
         for (auto& n : nodes) {
@@ -114,7 +114,7 @@ int main() {
 
         // 4 of 10 down → only 6 live (60 ≤ 66) → NOTHING finalizes (safe stall).
         Bus bus2; std::vector<std::unique_ptr<Node>> nodes2;
-        const VotePosition pos2 = make_pos(0x72, 101, 1);
+        const VotePosition pos2 = make_pos(0x72, 101);
         run_height(nodes2, bus2, /*live=*/6, pos2);
         bool any_final = false;
         for (auto& n : nodes2) any_final |= n->isFinal(pos2.block_id);
@@ -129,11 +129,11 @@ int main() {
         // 7 honest live (indices 0..6). Validator 7 is WEDGED-present: in the set,
         // "gossiping", but only emits garbage. Validators 8,9 are down.
         Bus bus; std::vector<std::unique_ptr<Node>> nodes;
-        const VotePosition real = make_pos(0x73, 102, 1);
+        const VotePosition real = make_pos(0x73, 102);
         run_height(nodes, bus, /*live=*/7, real);
 
         const Key& wedged = keys[7];
-        const VotePosition neverSubmitted = make_pos(0xEE, 102, 1);  // a block no honest node opened
+        const VotePosition neverSubmitted = make_pos(0xEE, 102);  // a block no honest node opened
         // (a) bad-signature vote for the real block; (b) valid sig but for a block
         //     no node submitted. Flood both into every honest gate, many times.
         Signature badSig = sign_vote(wedged, real); badSig[20] ^= 0x01;
@@ -161,7 +161,7 @@ int main() {
         bool healed = true;
         for (std::uint64_t h = 200; h < 203; ++h) {
             Bus bus; std::vector<std::unique_ptr<Node>> nodes;
-            const VotePosition pos = make_pos(std::uint8_t(0x80 + (h - 200)), h, 1);
+            const VotePosition pos = make_pos(std::uint8_t(0x80 + (h - 200)), h);
             run_height(nodes, bus, /*live=*/7, pos);  // same 3 perpetually down
             for (auto& n : nodes) {
                 auto c = n->cert(pos.block_id);
