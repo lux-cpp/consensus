@@ -53,8 +53,8 @@ int main() {
     //      by k3, but over a DIFFERENT position. Must be caught at quorum, evicted.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x41), 100, 7};
-        const VotePosition OTHER{blk(0x42), 100, 7};  // different block id, same height/epoch
+        const VotePosition P{.height = 100, .block_id = blk(0x41)};
+        const VotePosition OTHER{.height = 100, .block_id = blk(0x42)};  // different block id, same height
         e.submit(P);
         for (int i = 0; i < 3; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
         // k3 signs OTHER (a genuine sig, but wrong position) and offers it for P.
@@ -70,7 +70,7 @@ int main() {
     //      aggregate that verifies is the genuine sum — so this must NOT finalize.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x43), 101, 7};
+        const VotePosition P{.height = 101, .block_id = blk(0x43)};
         e.submit(P);
         (void)e.record_vote(P.block_id, keys[0].pk, sign(keys[0], P));  // genuine
         (void)e.record_vote(P.block_id, keys[1].pk, sign(keys[1], P));  // genuine
@@ -87,7 +87,7 @@ int main() {
     // A3 — identity/zero signature from an in-set validator.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x44), 102, 7};
+        const VotePosition P{.height = 102, .block_id = blk(0x44)};
         e.submit(P);
         for (int i = 0; i < 3; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
         Signature zero{};  // all-zero "signature"
@@ -99,7 +99,7 @@ int main() {
     //      genuine must finalize; the forged must NOT be in the cert.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x45), 103, 7};
+        const VotePosition P{.height = 103, .block_id = blk(0x45)};
         e.submit(P);
         for (int i = 0; i < 4; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
         check(e.is_final(P.block_id), "A4: 4 genuine votes finalize");
@@ -114,7 +114,7 @@ int main() {
     // A5 — stake-refund exactness after MULTIPLE evictions in one quorum check.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x46), 104, 7};
+        const VotePosition P{.height = 104, .block_id = blk(0x46)};
         e.submit(P);
         (void)e.record_vote(P.block_id, keys[0].pk, sign(keys[0], P));   // genuine
         Signature f1 = sign(keys[1], P); f1[5] ^= 0x01;                  // forged

@@ -51,7 +51,6 @@ VotePosition make_pos(std::uint8_t tag, std::uint64_t height) {
     VotePosition p{};
     p.block_id.fill(tag);
     p.height = height;
-    p.epoch = 1;
     return p;
 }
 }  // namespace
@@ -68,7 +67,7 @@ int main() {
     auto make_nodes = [&](Bus & bus, std::vector<std::unique_ptr<Node>> & nodes) {
         for (std::uint32_t i = 0; i < 5; ++i)
             nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, /*alpha=*/4,
-                                                   WaveConfig{5, 0.8, 4}, /*epoch=*/1, bus));
+                                                   WaveConfig{5, 0.8, 4}, bus));
         for (auto & n : nodes) bus.subs.push_back(n.get());
     };
 
