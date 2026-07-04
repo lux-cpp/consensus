@@ -22,6 +22,9 @@ void put_be16(std::vector<std::uint8_t>& b, std::uint16_t v) {
     b.push_back(std::uint8_t(v >> 8));
     b.push_back(std::uint8_t(v));
 }
+void put_be32(std::vector<std::uint8_t>& b, std::uint32_t v) {
+    for (int s = 24; s >= 0; s -= 8) b.push_back(std::uint8_t(v >> s));
+}
 void put_be64(std::vector<std::uint8_t>& b, std::uint64_t v) {
     for (int s = 56; s >= 0; s -= 8) b.push_back(std::uint8_t(v >> s));
 }
@@ -50,16 +53,22 @@ std::uint64_t two_thirds_stake_floor(std::uint64_t total) noexcept {
     return floor;
 }
 
-std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos) {
+std::vector<std::uint8_t> canonical_vote_message_for(const VotePosition& pos, bool accept) {
+    // Byte-for-byte the Go canonicalVoteMessageFor layout (162 bytes). Field ORDER
+    // and endianness are load-bearing: they are what a signature commits to, and a
+    // Go-signed vote must verify here and vice-versa.
     std::vector<std::uint8_t> buf;
-    buf.reserve(kDomainTagLen + 2 + 1 + 32 + 8 + 8 + 1);
-    buf.insert(buf.end(), kDomainTag, kDomainTag + kDomainTagLen);  // domain + NUL
-    put_be16(buf, kQuorumCertVersion);                              // version
-    buf.push_back(kQCFinality);                                     // qc_type (role)
-    buf.insert(buf.end(), pos.block_id.begin(), pos.block_id.end()); // block_id:32
-    put_be64(buf, pos.height);                                      // height:8
-    put_be64(buf, pos.epoch);                                       // epoch:8
-    buf.push_back(0x01);                                            // accept = true
+    buf.reserve(kDomainTagLen + 2 + 1 + 32 + 8 + 4 + 32 + 32 + 32 + 1);
+    buf.insert(buf.end(), kDomainTag, kDomainTag + kDomainTagLen);                     // domain + NUL
+    put_be16(buf, kQuorumCertVersion);                                                 // version:2
+    buf.push_back(kQCFinality);                                                        // qc_type:1
+    buf.insert(buf.end(), pos.chain_id.begin(), pos.chain_id.end());                   // chain_id:32
+    put_be64(buf, pos.height);                                                         // height:8
+    put_be32(buf, pos.round);                                                          // round:4
+    buf.insert(buf.end(), pos.block_id.begin(), pos.block_id.end());                   // block_id:32
+    buf.insert(buf.end(), pos.parent_id.begin(), pos.parent_id.end());                 // parent_id:32
+    buf.insert(buf.end(), pos.validator_set_root.begin(), pos.validator_set_root.end()); // validator_set_root:32
+    buf.push_back(accept ? std::uint8_t{0x01} : std::uint8_t{0x00});                   // accept:1
     return buf;
 }
 

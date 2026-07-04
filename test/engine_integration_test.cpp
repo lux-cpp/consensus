@@ -71,7 +71,6 @@ int main() {
         VotePosition A{};
         A.block_id.fill(0x41);
         A.height = 100;
-        A.epoch = 7;
         const auto & item = A.block_id;
 
         // Liveness: 4 virtuous polls (all 5 sampled peers vote yes) → decide Accept.
@@ -98,7 +97,6 @@ int main() {
         VotePosition B{};
         B.block_id.fill(0x42);
         B.height = 101;
-        B.epoch = 7;
         const auto & item = B.block_id;
 
         // 3 yes-rounds then a split (inconclusive) → confidence resets, undecided.
