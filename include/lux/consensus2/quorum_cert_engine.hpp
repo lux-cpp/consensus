@@ -58,7 +58,7 @@
 namespace lux::consensus2 {
 
 // ── Wire constants, bound into every signed message (non-malleable role/version)
-inline constexpr std::uint16_t kQuorumCertVersion = 2;  // mirrors Go QuorumCertVersion
+inline constexpr std::uint16_t kQuorumCertVersion = 3;  // mirrors Go QuorumCertVersion
 inline constexpr std::uint8_t  kQCFinality        = 1;  // mirrors Go QCFinality
 
 // ── Fixed-width position + crypto material (compressed BLS12-381, eth2 "min-pubkey")
@@ -89,12 +89,32 @@ struct Validator {
 // `parent_id`/`chain_id` complete the position; NONE of them key the equivocation
 // slot (that is HEIGHT-only — see Node::SlotKey).
 struct VotePosition {
-    Id32          chain_id{};            // the chain this position lives on
-    std::uint64_t height{};             // consensus height (the equivocation slot)
-    std::uint32_t round{};              // protocol round at this height
-    BlockId       block_id{};           // the block being voted on
-    Id32          parent_id{};          // the block's parent
-    Id32          validator_set_root{}; // commitment to the weighted set/era (Empty = unbound)
+    Id32          chain_id{};             // the chain this position lives on
+    std::uint64_t height{};              // consensus height (the equivocation slot)
+    std::uint32_t round{};               // protocol round at this height
+
+    // OUTER proposervm-envelope ids — transport/cache keys only. NON-AUTHORITATIVE:
+    // excluded from the signed message and from finality/equivocation. For a block
+    // that is not proposervm-wrapped, block_id == canonical_id (degrades to the
+    // pre-split behavior). Mirrors Go VotePosition.BlockID / ParentID.
+    BlockId       block_id{};            // outer envelope id of the block being voted on
+    Id32          parent_id{};           // outer envelope id of the parent
+
+    // INNER execution commitment — THE primary consensus object. Finality certifies
+    // canonical_id; two certs at one height conflict iff canonical_id differs. It is
+    // bound into the signed message, falling back to block_id/parent_id when Empty,
+    // so an unwrapped caller that sets only block_id signs the SAME bytes as before
+    // this split. Mirrors Go CanonicalID / ParentCanonicalID.
+    Id32          canonical_id{};        // inner execution id certified (Empty ⇒ use block_id)
+    Id32          parent_canonical_id{}; // inner execution id of parent (Empty ⇒ use parent_id)
+
+    // Post-execution commitments folded into the signed message so a cert pins the
+    // exact execution result + payload (Empty when the VM exposes none). Mirrors Go
+    // ExecutionStateRoot / PayloadRoot.
+    Id32          execution_state_root{};
+    Id32          payload_root{};
+
+    Id32          validator_set_root{};  // commitment to the weighted set/era (Empty = unbound)
 };
 
 // floor(2·total/3), computed without overflow — byte-identical to the Go
@@ -104,23 +124,27 @@ struct VotePosition {
 
 // The exact byte string a validator signs to vote on a position AND a decision.
 // BYTE-FOR-BYTE identical to the Go reference canonicalVoteMessageFor. Big-endian,
-// fixed-width, length-free (every field is fixed) — total 162 bytes:
+// fixed-width, length-free (every field is fixed) — total 226 bytes:
 //
-//   "LUX/chain/vote/v1\0"    18  domain tag (NUL-terminated role separator)
-//   version              2   uint16 BE (= kQuorumCertVersion)
+//   "LUX/chain/vote/v2\0"    18  domain tag (NUL-terminated role separator)
+//   version              2   uint16 BE (= kQuorumCertVersion = 3)
 //   qc_type              1   (= kQCFinality)
 //   chain_id             32
 //   height               8   uint64 BE
 //   round                4   uint32 BE
-//   block_id             32
-//   parent_id            32
+//   canonical_id         32  (inner execution id; ⇐ block_id when Empty)
+//   parent_canonical_id  32  (⇐ parent_id when Empty)
+//   execution_state_root 32
+//   payload_root         32
 //   validator_set_root   32
 //   accept               1   (0x01 accept | 0x00 reject)
 //
 // The domain tag + version + qc_type + accept byte make a signature un-liftable to
-// a different protocol, version, role, or decision; validator_set_root binds it to
-// the exact weighted set/era it was cast under. accept is bound BEFORE nothing (it
-// is last) so an ACCEPT and a REJECT over the same position are DISTINCT messages.
+// a different protocol, version, role, or decision. The signed id is the INNER
+// canonical id (the outer block_id/parent_id never enter the message); the state +
+// payload roots pin the exact execution result; validator_set_root binds it to the
+// exact weighted set/era it was cast under. accept is last, so an ACCEPT and a
+// REJECT over the same position are DISTINCT messages.
 [[nodiscard]] std::vector<std::uint8_t> canonical_vote_message_for(const VotePosition& pos, bool accept);
 
 // The canonical ACCEPT message — what a validator signs to vote ACCEPT and what a
