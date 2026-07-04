@@ -31,7 +31,7 @@ void put_be64(std::vector<std::uint8_t>& b, std::uint64_t v) {
 
 // Domain tag, NUL-terminated as a hard role separator — byte-identical to the Go
 // reference tag so the constructions are recognizably the same family.
-constexpr char kDomainTag[] = "LUX/chain/vote/v1\x00";
+constexpr char kDomainTag[] = "LUX/chain/vote/v2\x00";
 constexpr std::size_t kDomainTagLen = sizeof(kDomainTag) - 1;  // includes the NUL, drops the C terminator
 
 // Verify one validator's BLS signature over `msg`. Returns true IFF the signature
@@ -54,21 +54,30 @@ std::uint64_t two_thirds_stake_floor(std::uint64_t total) noexcept {
 }
 
 std::vector<std::uint8_t> canonical_vote_message_for(const VotePosition& pos, bool accept) {
-    // Byte-for-byte the Go canonicalVoteMessageFor layout (162 bytes). Field ORDER
-    // and endianness are load-bearing: they are what a signature commits to, and a
-    // Go-signed vote must verify here and vice-versa.
+    // Byte-for-byte the Go canonicalVoteMessageFor layout (226 bytes, "vote/v2",
+    // QuorumCertVersion 3). Field ORDER and endianness are load-bearing: they are
+    // what a signature commits to, and a Go-signed vote must verify here and vice
+    // versa. The signed id is the INNER canonical id (the outer block_id/parent_id
+    // are non-authoritative and never enter the message) — falling back to the outer
+    // id when the canonical is unset, in this ONE place, so every producer of a
+    // position signs the same bytes for the same block.
+    const Id32& canonical        = (pos.canonical_id        == Id32{}) ? pos.block_id  : pos.canonical_id;
+    const Id32& parent_canonical = (pos.parent_canonical_id == Id32{}) ? pos.parent_id : pos.parent_canonical_id;
+
     std::vector<std::uint8_t> buf;
-    buf.reserve(kDomainTagLen + 2 + 1 + 32 + 8 + 4 + 32 + 32 + 32 + 1);
-    buf.insert(buf.end(), kDomainTag, kDomainTag + kDomainTagLen);                     // domain + NUL
-    put_be16(buf, kQuorumCertVersion);                                                 // version:2
-    buf.push_back(kQCFinality);                                                        // qc_type:1
-    buf.insert(buf.end(), pos.chain_id.begin(), pos.chain_id.end());                   // chain_id:32
-    put_be64(buf, pos.height);                                                         // height:8
-    put_be32(buf, pos.round);                                                          // round:4
-    buf.insert(buf.end(), pos.block_id.begin(), pos.block_id.end());                   // block_id:32
-    buf.insert(buf.end(), pos.parent_id.begin(), pos.parent_id.end());                 // parent_id:32
-    buf.insert(buf.end(), pos.validator_set_root.begin(), pos.validator_set_root.end()); // validator_set_root:32
-    buf.push_back(accept ? std::uint8_t{0x01} : std::uint8_t{0x00});                   // accept:1
+    buf.reserve(kDomainTagLen + 2 + 1 + 32 + 8 + 4 + 32 + 32 + 32 + 32 + 32 + 1);
+    buf.insert(buf.end(), kDomainTag, kDomainTag + kDomainTagLen);                          // domain + NUL
+    put_be16(buf, kQuorumCertVersion);                                                      // version:3
+    buf.push_back(kQCFinality);                                                             // qc_type:1
+    buf.insert(buf.end(), pos.chain_id.begin(), pos.chain_id.end());                        // chain_id:32
+    put_be64(buf, pos.height);                                                              // height:8
+    put_be32(buf, pos.round);                                                               // round:4
+    buf.insert(buf.end(), canonical.begin(), canonical.end());                              // canonical_id:32 (⇐ block_id)
+    buf.insert(buf.end(), parent_canonical.begin(), parent_canonical.end());                // parent_canonical_id:32 (⇐ parent_id)
+    buf.insert(buf.end(), pos.execution_state_root.begin(), pos.execution_state_root.end());// execution_state_root:32
+    buf.insert(buf.end(), pos.payload_root.begin(), pos.payload_root.end());                // payload_root:32
+    buf.insert(buf.end(), pos.validator_set_root.begin(), pos.validator_set_root.end());    // validator_set_root:32
+    buf.push_back(accept ? std::uint8_t{0x01} : std::uint8_t{0x00});                        // accept:1
     return buf;
 }
 
