@@ -85,6 +85,13 @@ target_link_libraries(batch_verify_attack_test PRIVATE consensus2)
 target_compile_options(batch_verify_attack_test PRIVATE -Wall -Wextra)
 add_test(NAME batch_verify_attack COMMAND batch_verify_attack_test)
 
+# ── canonical-message parity KAT: the signed message is byte-for-byte the Go
+#    reference (engine/chain/quorum_cert.go). A layout drift is a finality split.
+add_executable(canonical_message_parity_test test/canonical_message_parity_test.cpp)
+target_link_libraries(canonical_message_parity_test PRIVATE consensus2)
+target_compile_options(canonical_message_parity_test PRIVATE -Wall -Wextra)
+add_test(NAME canonical_message_parity COMMAND canonical_message_parity_test)
+
 # ── BFT parity gap tests: agreement (no double finalize), liveness, acceptance window
 add_executable(no_double_finalize_test test/no_double_finalize_test.cpp)
 target_link_libraries(no_double_finalize_test PRIVATE consensus2)
@@ -118,6 +125,7 @@ if (CONSENSUS2_SANITIZE)
     set(_c2_san -fsanitize=${CONSENSUS2_SANITIZE} -fno-omit-frame-pointer)
     set(_c2_targets consensus2 toy_stub_killer_test poll_driver_test
         engine_integration_test multi_node_test batch_verify_attack_test
+        canonical_message_parity_test
         no_double_finalize_test liveness_test out_of_turn_test)
     if (ZAP_DIR)
         list(APPEND _c2_targets zap_vote_transport_test)

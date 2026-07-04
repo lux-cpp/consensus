@@ -11,9 +11,9 @@
 //   WINDOW OPEN  — a position collects votes ONLY after submit() has opened it
 //                  (the deterministic, identical-on-every-node "eligibility"); a
 //                  vote for an unopened position is rejected (no EARLY acceptance).
-//   FULLY BOUND  — a vote/cert binds the canonical (block_id, height, epoch); a
-//                  signature is non-malleable across position, so a STALE sig for
-//                  another height/epoch/block cannot be lifted onto this one.
+//   FULLY BOUND  — a vote/cert binds the canonical (chain,height,round,block,parent,
+//                  validator-set-root); a signature is non-malleable across position,
+//                  so a STALE sig for another height/set-era/block cannot be lifted here.
 //
 // The standard's enumerated rejections — out-of-set / forged / STALE / sub-quorum
 // / tampered / EARLY — must ALL fail; cert validation is unchanged; an after-window
@@ -54,8 +54,8 @@ Key make_key(std::uint8_t tag) {
     if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint64_t epoch) {
-    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.epoch = epoch; return p;
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint8_t set_era) {
+    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.validator_set_root.fill(set_era); return p;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
@@ -104,14 +104,14 @@ int main() {
         const VotePosition P  = make_pos(0x42, 20, 1);   // the open position
         e.submit(P);
         // Four in-set validators each sign a DIFFERENT canonical position and offer
-        // it for P (domain-separated message binds block_id, height, epoch). Four
+        // it for P (domain-separated message binds block_id, height, set-root). Four
         // votes (80 stake) reach the quorum check, which verifies and rejects all.
         const VotePosition diffHeight = make_pos(0x42, 21, 1);  // stale: another height
-        const VotePosition diffEpoch  = make_pos(0x42, 20, 2);  // another epoch (set era)
+        const VotePosition diffSetRoot = make_pos(0x42, 20, 2);  // another validator-set root (era)
         const VotePosition diffBlock  = make_pos(0x99, 20, 1);  // another block id
         const VotePosition diffAll    = make_pos(0x77, 99, 9);  // nothing in common
         (void)e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], diffHeight));
-        (void)e.record_vote(P.block_id, keys[1].pk, sign_vote(keys[1], diffEpoch));
+        (void)e.record_vote(P.block_id, keys[1].pk, sign_vote(keys[1], diffSetRoot));
         (void)e.record_vote(P.block_id, keys[2].pk, sign_vote(keys[2], diffBlock));
         check(e.record_vote(P.block_id, keys[3].pk, sign_vote(keys[3], diffAll)) == VoteResult::RejectedBadSignature,
               "the stale vote that reaches the quorum check ⇒ RejectedBadSignature");

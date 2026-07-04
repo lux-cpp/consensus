@@ -13,7 +13,6 @@ Node::Node(std::uint32_t index,
            std::vector<Validator> validator_set,
            std::uint32_t alpha,
            WaveConfig wave_cfg,
-           std::uint64_t /*epoch*/,
            VoteTransport & tx)
     : index_(index), sk_(sk), pk_(pk),
       gate_(std::move(validator_set), alpha), wave_(wave_cfg), tx_(tx) {}

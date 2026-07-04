@@ -106,7 +106,7 @@ int main() {
     banner(1, "α distinct votes with >2/3 stake FINALIZE");
     bool s1 = true;
     {
-        const VotePosition A{make_block(0x41), /*height=*/100, /*epoch=*/7};
+        const VotePosition A{.height = 100, .block_id = make_block(0x41)};
         s1 &= check(engine.submit(A), "submit(A)");
         for (int i = 0; i < 4; ++i)  // validators 0..3 → 4 distinct, 80 stake
             s1 &= check(engine.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A)) == VoteResult::Accepted,
@@ -121,7 +121,7 @@ int main() {
     banner(2, "the aggregate quorum cert RE-VERIFIES (and tamper is caught)");
     bool s2 = true;
     {
-        const VotePosition A{make_block(0x42), /*height=*/100, /*epoch=*/7};
+        const VotePosition A{.height = 100, .block_id = make_block(0x42)};
         s2 &= check(engine.submit(A), "submit(A2)");
         for (int i = 0; i < 4; ++i)
             (void)engine.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A));
@@ -146,7 +146,7 @@ int main() {
     banner(3, "ONE validator's vote replayed 5× does NOT finalize (dedup)");
     bool s3 = true;
     {
-        const VotePosition B{make_block(0x43), /*height=*/101, /*epoch=*/7};
+        const VotePosition B{.height = 101, .block_id = make_block(0x43)};
         s3 &= check(engine.submit(B), "submit(B)");
         const Signature v0 = sign_vote(keys[0], B);
         s3 &= check(engine.record_vote(B.block_id, keys[0].pk, v0) == VoteResult::Accepted,
@@ -167,7 +167,7 @@ int main() {
     bool s4 = true;
     {
         // 4a: 3 distinct equal-stake voters — BOTH gates fail (3<4 and 60<=66).
-        const VotePosition C{make_block(0x44), 102, 7};
+        const VotePosition C{.height = 102, .block_id = make_block(0x44)};
         s4 &= check(engine.submit(C), "submit(C)");
         for (int i = 0; i < 3; ++i)
             (void)engine.record_vote(C.block_id, keys[i].pk, sign_vote(keys[i], C));
@@ -183,7 +183,7 @@ int main() {
             {sk_keys[3].pk, 10}, {sk_keys[4].pk, 60},  // total 100, floor 66
         };
         QuorumCertEngine skewed_engine(skewed, /*alpha=*/3);
-        const VotePosition D{make_block(0x45), 103, 9};
+        const VotePosition D{.height = 103, .block_id = make_block(0x45)};
         s4 &= check(skewed_engine.submit(D), "submit(D) on skewed engine");
         for (int i = 0; i < 3; ++i)  // the 3 low-stake validators: count 3>=α, stake 30
             (void)skewed_engine.record_vote(D.block_id, sk_keys[i].pk, sign_vote(sk_keys[i], D));
@@ -206,7 +206,7 @@ int main() {
     banner(5, "forged BLS sigs are evicted at quorum — never finalize");
     bool s5 = true;
     {
-        const VotePosition E{make_block(0x46), 104, 7};
+        const VotePosition E{.height = 104, .block_id = make_block(0x46)};
         s5 &= check(engine.submit(E), "submit(E)");
 
         // Out-of-set + unknown-block are cheap checks, still rejected per-vote.

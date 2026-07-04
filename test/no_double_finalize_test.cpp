@@ -24,8 +24,8 @@
 //       never finalizes anywhere. The emergent property, asserted — not mocked.
 //
 //   [4] LIFECYCLE / height-only + finalize-then-resign — the two safety properties
-//       the slot's KEY and LIFECYCLE must have. (a) A DIFFERENT-EPOCH sibling at the
-//       same height is refused (the slot is HEIGHT-ONLY; epoch is a proposer-chosen
+//       the slot's KEY and LIFECYCLE must have. (a) A DIFFERENT-ROUND sibling at the
+//       same height is refused (the slot is HEIGHT-ONLY; round is a protocol-chosen
 //       axis that must not fragment it). (b) After a height is decided, a sibling
 //       there is refused BOTH while the slot is retained AND after it is GC'd — the
 //       durable decided-height gate closes the prune-then-resign fork. A higher open
@@ -34,8 +34,8 @@
 // Teeth (mutation-verified, see proofs/no_double_finalize.tex and the report):
 //   - delete the Node non-equivocation guard ⇒ [2] sees two broadcasts and [3]
 //     finalizes BOTH branches with only f=3 Byzantine (safety violated). RED.
-//   - key the slot per-block_id, or per-(height,epoch) instead of per-HEIGHT ⇒ [4a]
-//     signs both same-height siblings (a different-epoch sibling opens a second slot),
+//   - key the slot per-block_id, or per-(height,round) instead of per-HEIGHT ⇒ [4a]
+//     signs both same-height siblings (a different-round sibling opens a second slot),
 //     the exact fresh-net double-finalization. RED.
 //   - erase the just-decided height's slot AND drop the decided-height gate (the
 //     inclusive-prune-no-gate pre-fix state) ⇒ [4b] signs the sibling after the GC. RED.
@@ -76,8 +76,8 @@ Key make_key(std::uint8_t tag) {
     if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint64_t epoch) {
-    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.epoch = epoch; return p;
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round) {
+    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.round = round; return p;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
@@ -114,7 +114,7 @@ int main() {
     check(two_thirds_stake_floor(kN * kStake) == 66, "floor(2/3·100) == 66");
 
     // ── [1] GATE quorum-intersection: tight at f = n/3 ───────────────────────────
-    // B1,B2 are CONFLICTING siblings (same height+epoch, different id). Equivocators
+    // B1,B2 are CONFLICTING siblings (same height+round, different id). Equivocators
     // sign BOTH; honest validators sign at most one. Build a fresh engine per case.
     {
         const int b = g_fail;
@@ -167,10 +167,10 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, 1, bus);
+        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
         bus.subs.push_back(&node);
         const VotePosition B1 = make_pos(0xB1, 9, 1);
-        const VotePosition B2 = make_pos(0xB2, 9, 1);  // sibling: same (height,epoch)
+        const VotePosition B2 = make_pos(0xB2, 9, 1);  // sibling: same (height,round)
         node.submit(B1); node.submit(B2);
 
         // Drive B1 to a β-confirmed ACCEPT (it commits slot (9,1)→B1 and broadcasts),
@@ -195,7 +195,7 @@ int main() {
         std::vector<std::unique_ptr<Node>> honest;
         for (std::uint32_t i = 3; i < kN; ++i)
             honest.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
-                                                    WaveConfig{5, 0.8, 4}, 1, bus));
+                                                    WaveConfig{5, 0.8, 4}, bus));
         for (auto& n : honest) bus.subs.push_back(n.get());
 
         const VotePosition B1 = make_pos(0xB1, 12, 1);
@@ -249,24 +249,23 @@ int main() {
     {
         const int b = g_fail;
 
-        // [4a] DIFFERENT-EPOCH sibling at the SAME height must be refused. The slot is
-        // HEIGHT-ONLY; the epoch is a proposer-chosen axis (a bare/pre-fork block and a
-        // wrapped one at one height carry different epochs). Under the pre-fix
-        // (height,epoch) slot, B2 would open a SECOND slot and be signed — two α/⅔ certs
-        // at one height, the fresh-net fatal.
+        // [4a] DIFFERENT-ROUND sibling at the SAME height must be refused. The slot is
+        // HEIGHT-ONLY; the round is a protocol-chosen axis (a re-proposal at the same
+        // height bumps the round). Under the pre-fix (height,round) slot, B2 would open a
+        // SECOND slot and be signed — two α/⅔ certs at one height, the fresh-net fatal.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, 1, bus);
+            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition B1 = make_pos(0xB1, 9, 1);
-            const VotePosition B2 = make_pos(0xB2, 9, 2);  // SAME height, DIFFERENT epoch
+            const VotePosition B2 = make_pos(0xB2, 9, 2);  // SAME height, DIFFERENT round
             node.submit(B1); node.submit(B2);
             for (int r = 0; r < 4; ++r) node.poll(B1, 5, 5);  // commit height 9 → B1
             for (int r = 0; r < 4; ++r) node.poll(B2, 5, 5);  // must REFUSE (height 9 taken)
             check(bus.broadcasts.size() == 1,
-                  "[4a] height-only slot: a different-EPOCH sibling at the same height is refused");
+                  "[4a] height-only slot: a different-ROUND sibling at the same height is refused");
             check(!bus.broadcasts.empty() && bus.broadcasts[0].block_id == B1.block_id,
-                  "[4a] the single vote is for B1, never the different-epoch sibling B2");
+                  "[4a] the single vote is for B1, never the different-round sibling B2");
         }
 
         // [4b] FINALIZE-THEN-RESIGN: after height H is decided, a sibling there is refused
@@ -274,10 +273,10 @@ int main() {
         // durable decided-height gate. A higher OPEN height stays signable.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, 1, bus);
+            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition A    = make_pos(0xA1, 20, 1);  // the winner at height 20
-            const VotePosition Bsib = make_pos(0xB2, 20, 2);  // losing sibling at 20 (diff id+epoch)
+            const VotePosition Bsib = make_pos(0xB2, 20, 2);  // losing sibling at 20 (diff id+round)
             const VotePosition C    = make_pos(0xC3, 22, 1);  // a higher, still-open height
             node.submit(A); node.submit(Bsib); node.submit(C);
 

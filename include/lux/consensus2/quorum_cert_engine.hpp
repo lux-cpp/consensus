@@ -8,8 +8,9 @@
 //
 //   A block FINALIZES only after α DISTINCT validators have each produced a
 //   correctly-BLS-signed ACCEPT vote over the SAME canonical position
-//   (block_id, height, epoch) AND the summed stake of those distinct voters is
-//   a STRICT two-thirds supermajority: voted > floor(2/3 · total_stake).
+//   (chain, height, round, block, parent, validator-set-root) AND the summed stake
+//   of those distinct voters is a STRICT two-thirds supermajority:
+//   voted > floor(2/3 · total_stake).
 //
 // DECOMPLECTION — three orthogonal concerns, never braided:
 //   1. THE RULE   — "α distinct voters AND >2/3 stake, fail-closed" lives in
@@ -19,8 +20,8 @@
 //                    never invents a signature scheme; it CALLS a proven one.
 //   3. THE MESSAGE— canonical_vote_message() is a deterministic, domain-
 //                    separated function of the position. A signature for one
-//                    (block,height,epoch,accept) can never be replayed at
-//                    another.
+//                    (chain,height,round,block,parent,set-root,accept) can never
+//                    be replayed at another.
 //
 // This is a quorum CERTIFICATE, not threshold signing: each validator holds a
 // DISTINCT key and signs individually; nothing combines secret shares. Building
@@ -40,10 +41,10 @@
 //
 // SCOPE (seed): this is the finality GATE only. Snow sampling / re-poll,
 // equivocation slashing, the PQ Corona/Pulsar/Magnetar legs (ML-DSA/Ringtail),
-// and networking are OUT of scope and arrive in later phases. The position here
-// is (block_id,height,epoch); the full Go position axes (chain/round/parent/
-// validator-set-root) and pluggable non-BLS lanes land when the gate grows into
-// the full engine — the rule above does not change.
+// and networking are OUT of scope and arrive in later phases. The position carries
+// the full Go axes (chain/height/round/block/parent/validator-set-root) and its
+// canonical message is byte-for-byte the Go reference; the pluggable non-BLS lanes
+// land when the gate grows into the full engine — the rule above does not change.
 
 #pragma once
 
@@ -60,8 +61,9 @@ namespace lux::consensus2 {
 inline constexpr std::uint16_t kQuorumCertVersion = 2;  // mirrors Go QuorumCertVersion
 inline constexpr std::uint8_t  kQCFinality        = 1;  // mirrors Go QCFinality
 
-// ── Fixed-width crypto material (compressed BLS12-381, eth2 "min-pubkey" scheme)
-using BlockId   = std::array<std::uint8_t, 32>;  // 32-byte block identifier
+// ── Fixed-width position + crypto material (compressed BLS12-381, eth2 "min-pubkey")
+using Id32      = std::array<std::uint8_t, 32>;  // 32-byte identifier / commitment (Go ids.ID)
+using BlockId   = Id32;                          // 32-byte block identifier
 using PubKey    = std::array<std::uint8_t, 48>;  // compressed G1 public key
 using Signature = std::array<std::uint8_t, 96>;  // compressed G2 signature
 
@@ -72,13 +74,27 @@ struct Validator {
     std::uint64_t stake;
 };
 
-// The consensus position a vote (and a cert) binds to. Every axis is folded into
-// the canonical signed message, so a signature for one position can never be
-// presented at another.
+// The consensus position a vote (and a cert) binds to. FULL PARITY with the Go
+// reference VotePosition (engine/chain/quorum_cert.go): the same six axes, in the
+// same order, each folded into the canonical signed message — so a signature for
+// one position can never be presented at another (height/round/block/parent/chain/
+// validator-set era).
+//
+// Every axis defaults to zero/empty. A caller that sets none but block_id/height
+// signs a message BYTE-IDENTICAL to Go with the other axes Empty — the documented
+// backward-safe path, not a second code path. `validator_set_root` replaces the
+// seed's old `epoch` field: it binds the EXACT weighted validator set the vote was
+// cast under (Go's MEDIUM epoch-binding fix), so a cert gathered under set-root R
+// cannot be re-verified as certifying under a different set R'. `round` and
+// `parent_id`/`chain_id` complete the position; NONE of them key the equivocation
+// slot (that is HEIGHT-only — see Node::SlotKey).
 struct VotePosition {
-    BlockId       block_id;
-    std::uint64_t height;
-    std::uint64_t epoch;
+    Id32          chain_id{};            // the chain this position lives on
+    std::uint64_t height{};             // consensus height (the equivocation slot)
+    std::uint32_t round{};              // protocol round at this height
+    BlockId       block_id{};           // the block being voted on
+    Id32          parent_id{};          // the block's parent
+    Id32          validator_set_root{}; // commitment to the weighted set/era (Empty = unbound)
 };
 
 // floor(2·total/3), computed without overflow — byte-identical to the Go
@@ -86,14 +102,33 @@ struct VotePosition {
 // The STRICT supermajority predicate is voted > two_thirds_stake_floor(total).
 [[nodiscard]] std::uint64_t two_thirds_stake_floor(std::uint64_t total) noexcept;
 
-// The exact byte string a validator signs to ACCEPT a position. Deterministic and
-// domain-separated:
-//   "LUX/chain/vote/v1\0"  version:2(BE)  qc_type:1  block_id:32
-//   height:8(BE)  epoch:8(BE)  accept:1(=0x01)
+// The exact byte string a validator signs to vote on a position AND a decision.
+// BYTE-FOR-BYTE identical to the Go reference canonicalVoteMessageFor. Big-endian,
+// fixed-width, length-free (every field is fixed) — total 162 bytes:
+//
+//   "LUX/chain/vote/v1\0"    18  domain tag (NUL-terminated role separator)
+//   version              2   uint16 BE (= kQuorumCertVersion)
+//   qc_type              1   (= kQCFinality)
+//   chain_id             32
+//   height               8   uint64 BE
+//   round                4   uint32 BE
+//   block_id             32
+//   parent_id            32
+//   validator_set_root   32
+//   accept               1   (0x01 accept | 0x00 reject)
+//
 // The domain tag + version + qc_type + accept byte make a signature un-liftable to
-// a different protocol, version, role, or decision (anti-replay), matching the Go
-// canonicalVoteMessageFor discipline.
-[[nodiscard]] std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos);
+// a different protocol, version, role, or decision; validator_set_root binds it to
+// the exact weighted set/era it was cast under. accept is bound BEFORE nothing (it
+// is last) so an ACCEPT and a REJECT over the same position are DISTINCT messages.
+[[nodiscard]] std::vector<std::uint8_t> canonical_vote_message_for(const VotePosition& pos, bool accept);
+
+// The canonical ACCEPT message — what a validator signs to vote ACCEPT and what a
+// finality cert's signatures are bound to (a cert proves ACCEPT). The single entry
+// every signer/verifier uses; mirrors Go CanonicalVoteMessage = ...For(pos, true).
+[[nodiscard]] inline std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos) {
+    return canonical_vote_message_for(pos, true);
+}
 
 // Outcome of offering one vote. Only Accepted moves the finality needle; every
 // other variant leaves distinct-voter count and summed stake untouched.
