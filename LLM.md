@@ -130,6 +130,11 @@ ctest --test-dir build --output-on-failure
 Sanitizers cover consensus2's own code only (the reused assembly crypto stays
 uninstrumented): `-DCONSENSUS2_SANITIZE=address,undefined` or `=thread`.
 
+TSan aborts with `FATAL: ThreadSanitizer: unexpected memory mapping` on kernels
+that hand out 32 bits of mmap randomness — its shadow mapping does not fit. That
+is the loader, not the code. Run the suite with randomization off:
+`setarch -R ctest --test-dir build`. ASan needs no such thing.
+
 Tests live in ONE list in `CMakeLists.txt` (`CONSENSUS2_TESTS`). A new test is one
 line there: source `test/<name>_test.cpp`, target `<name>_test`, ctest name
 `<name>`. The sanitizer block reads the same list, so a test can never be
