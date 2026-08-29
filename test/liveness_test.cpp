@@ -94,7 +94,7 @@ int main() {
                           std::uint32_t live, const VotePosition& pos) {
         for (std::uint32_t i = 0; i < live; ++i)
             nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
-                                                   WaveConfig{5, 0.8, 4}, bus));
+                                                   WaveConfig{5, 4, 4}, bus));
         for (auto& n : nodes) bus.subs.push_back(n.get());
         for (auto& n : nodes) n->submit(pos);
         for (int r = 0; r < 4; ++r) for (auto& n : nodes) n->poll(pos.block_id, 5, 5);  // β rounds

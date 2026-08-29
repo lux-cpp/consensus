@@ -64,7 +64,7 @@ int main() {
     for (const auto& k : keys) set.push_back({k.pk, 20});
 
     QuorumCertEngine gate(set, /*alpha=*/4);
-    Wave wave(WaveConfig{/*k=*/5, /*alpha=*/0.8, /*beta=*/4});
+    Wave wave(WaveConfig{/*k=*/5, /*threshold=*/4, /*beta=*/4});
 
     // ── [1] Happy path: wave reaches β ACCEPT, then the gate certifies. ──────
     {

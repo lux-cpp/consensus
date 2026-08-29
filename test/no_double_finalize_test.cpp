@@ -171,7 +171,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
+        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
         bus.subs.push_back(&node);
         const VotePosition B1 = make_pos(0xB1, 9, 1);
         const VotePosition B2 = make_pos(0xB2, 9, 1);  // sibling: same (height,epoch)
@@ -199,7 +199,7 @@ int main() {
         std::vector<std::unique_ptr<Node>> honest;
         for (std::uint32_t i = 3; i < kN; ++i)
             honest.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
-                                                    WaveConfig{5, 0.8, 4}, bus));
+                                                    WaveConfig{5, 4, 4}, bus));
         for (auto& n : honest) bus.subs.push_back(n.get());
 
         const VotePosition B1 = make_pos(0xB1, 12, 1);
@@ -260,7 +260,7 @@ int main() {
         // at one height, the fresh-net fatal.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
+            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition B1 = make_pos(0xB1, 9, 1);
             const VotePosition B2 = make_pos(0xB2, 9, 2);  // SAME height, DIFFERENT epoch
@@ -278,7 +278,7 @@ int main() {
         // durable decided-height gate. A higher OPEN height stays signable.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
+            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition A    = make_pos(0xA1, 20, 1);  // the winner at height 20
             const VotePosition Bsib = make_pos(0xB2, 20, 2);  // losing sibling at 20 (diff id+epoch)
@@ -328,7 +328,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
+        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
         bus.subs.push_back(&node);
 
         const VotePosition at7 = make_pos(0xA1, 7, 1);

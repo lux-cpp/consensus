@@ -36,7 +36,13 @@ inline constexpr std::uint32_t kFeasibleBeta = 2;
 
 struct WaveConfig {
     std::uint32_t k = 21;                       // committee sample size per round
-    double alpha = kConsensusSuperMajority;     // threshold = ceil(k·alpha)
+    // The quorum is a COUNT, carried exactly — never a ratio the threshold is
+    // recovered from. Storing α as a double and recomputing ceil(k·α) overshot
+    // by one for 33 of the 997 committee sizes in 4..1000: at k=41 the count is
+    // 28, 28/41 is not representable, and ceil(41 · 0.6829268292682927) is 29.
+    // A round sitting at exactly 28/41 then never decides. There is no rounding
+    // mode that fixes this, because the ratio has already lost the answer.
+    std::uint32_t threshold = equal_stake_supermajority(21);
     std::uint32_t beta = kFeasibleBeta;         // consecutive rounds required to decide
 
     // The parameter set a live network of n validators runs — Go

@@ -13,10 +13,10 @@ namespace lux::consensus {
 WaveConfig WaveConfig::feasible(std::uint32_t n) noexcept {
     WaveConfig cfg;
     cfg.k = n < kMinBFTCommittee ? kMinBFTCommittee : n;  // never a dead large set
-    // α = the equal-stake strict-⅔ count, expressed as a ratio of K. The count
-    // itself is threshold.hpp's; ceil(K·α) recovers it exactly.
-    cfg.alpha = static_cast<double>(equal_stake_supermajority(cfg.k)) /
-                static_cast<double>(cfg.k);
+    // The count itself, from threshold.hpp — Go's equal-stake strict-⅔ rule.
+    // Carried as the count, so there is no ratio to recover it from and nothing
+    // to round.
+    cfg.threshold = equal_stake_supermajority(cfg.k);
     cfg.beta  = kFeasibleBeta;
     return cfg;
 }
@@ -26,16 +26,14 @@ Wave::Wave(WaveConfig cfg) : cfg_(cfg) {
         throw std::invalid_argument("wave: k (committee size) is zero");
     if (cfg_.beta == 0)
         throw std::invalid_argument("wave: beta (confidence threshold) is zero");
-    if (!(cfg_.alpha > 0.0) || cfg_.alpha > 1.0)
-        throw std::invalid_argument("wave: alpha must be in (0, 1]");
+    if (cfg_.threshold == 0 || cfg_.threshold > cfg_.k)
+        throw std::invalid_argument("wave: threshold must be in [1, k]");
 
-    threshold_ = alpha_threshold(cfg_.k, cfg_.alpha);
+    threshold_ = static_cast<int>(cfg_.threshold);
     // A supermajority threshold must exceed half the committee, else both ACCEPT
     // and REJECT could clear it in one round. Fail closed on an unsafe config.
     if (threshold_ * 2 <= static_cast<int>(cfg_.k))
-        throw std::invalid_argument("wave: alpha too low — threshold not a majority of k");
-    if (threshold_ > static_cast<int>(cfg_.k))
-        threshold_ = static_cast<int>(cfg_.k);
+        throw std::invalid_argument("wave: threshold is not a majority of k");
 }
 
 Decision Wave::record_round(const Item & item, std::uint32_t yes, std::uint32_t total) {

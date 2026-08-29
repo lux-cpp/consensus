@@ -286,14 +286,31 @@ void committee() {
                   u64(r, "alpha_for_k"),
               "alpha_threshold" + at + " == Go AlphaForK (ceil, not truncation)");
     }
-    // The wave a live set of n runs must agree with the same rule.
-    for (std::uint32_t n : {4u, 5u, 11u, 21u, 100u}) {
-        const WaveConfig cfg = WaveConfig::feasible(n);
-        check(cfg.k == n, "feasible(" + std::to_string(n) + ") keeps K = n");
-        check(static_cast<std::uint32_t>(alpha_threshold(cfg.k, cfg.alpha)) ==
-                  equal_stake_supermajority(n),
-              "feasible(" + std::to_string(n) + ") threshold is the strict-⅔ count");
+    // The wave a live set of n runs must agree with the same rule — at EVERY
+    // size, not a five-point sample. This loop used to check {4,5,11,21,100},
+    // and the ratio it checked round-tripped correctly for exactly those five
+    // while overshooting by one for 33 other sizes in 4..1000. n=41 asked for
+    // 29 where Go's quorum is 28, so a round sitting at 28/41 never decided,
+    // and no test here could see it. A sample cannot establish "matches Go at
+    // every committee size"; the sweep can.
+    {
+        std::uint32_t diverged = 0, first = 0;
+        for (std::uint32_t n = 4; n <= 1000; ++n) {
+            const WaveConfig cfg = WaveConfig::feasible(n);
+            if (cfg.k != n || cfg.threshold != equal_stake_supermajority(n)) {
+                if (diverged == 0) first = n;
+                ++diverged;
+            }
+        }
+        check(diverged == 0,
+              diverged == 0
+                  ? std::string("feasible(n) is the strict-⅔ count for every n in 4..1000")
+                  : "feasible(n) diverges at " + std::to_string(diverged) +
+                        " sizes, first n=" + std::to_string(first));
     }
+    // The size the ratio got wrong, named, so a regression is legible.
+    check(WaveConfig::feasible(41).threshold == 28,
+          "feasible(41) quorum is 28 — the size the float representation missed");
 }
 
 }  // namespace
