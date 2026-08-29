@@ -10,6 +10,17 @@
 
 namespace lux::consensus2 {
 
+WaveConfig WaveConfig::feasible(std::uint32_t n) noexcept {
+    WaveConfig cfg;
+    cfg.k = n < kMinBFTCommittee ? kMinBFTCommittee : n;  // never a dead large set
+    // α = the equal-stake strict-⅔ count, expressed as a ratio of K. The count
+    // itself is threshold.hpp's; ceil(K·α) recovers it exactly.
+    cfg.alpha = static_cast<double>(equal_stake_supermajority(cfg.k)) /
+                static_cast<double>(cfg.k);
+    cfg.beta  = kFeasibleBeta;
+    return cfg;
+}
+
 Wave::Wave(WaveConfig cfg) : cfg_(cfg) {
     if (cfg_.k == 0)
         throw std::invalid_argument("wave: k (committee size) is zero");
@@ -18,7 +29,7 @@ Wave::Wave(WaveConfig cfg) : cfg_(cfg) {
     if (!(cfg_.alpha > 0.0) || cfg_.alpha > 1.0)
         throw std::invalid_argument("wave: alpha must be in (0, 1]");
 
-    threshold_ = static_cast<int>(static_cast<double>(cfg_.k) * cfg_.alpha);
+    threshold_ = alpha_threshold(cfg_.k, cfg_.alpha);
     // A supermajority threshold must exceed half the committee, else both ACCEPT
     // and REJECT could clear it in one round. Fail closed on an unsafe config.
     if (threshold_ * 2 <= static_cast<int>(cfg_.k))

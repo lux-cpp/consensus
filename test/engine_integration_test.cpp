@@ -16,7 +16,7 @@
 #include "lux/consensus2/photon.hpp"
 #include "lux/consensus2/wave.hpp"
 #include "lux/consensus2/quorum_cert_engine.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdio>
@@ -41,14 +41,14 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen failed"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk failed"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen failed"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk failed"); std::exit(2); }
     return k;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
     Signature sig{};
-    if (cevm::crypto::bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign failed"); std::exit(2); }
+    if (bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign failed"); std::exit(2); }
     return sig;
 }
 }  // namespace
@@ -71,7 +71,7 @@ int main() {
         VotePosition A{};
         A.block_id.fill(0x41);
         A.height = 100;
-        A.epoch = 7;
+        A.round = 7;
         const auto & item = A.block_id;
 
         // Liveness: 4 virtuous polls (all 5 sampled peers vote yes) → decide Accept.
@@ -83,7 +83,7 @@ int main() {
         // votes carrying >2/3 stake into a real, re-verifying quorum certificate.
         check(d == Decision::Accept && gate.submit(A), "gate.submit after wave Accept");
         for (int i = 0; i < 4; ++i)
-            check(gate.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A)) == VoteResult::Accepted,
+            check(gate.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A)) == VoteResult::Recorded,
                   "signed ACCEPT vote recorded");
         check(gate.is_final(A.block_id), "gate: block is final (≥α distinct, >2/3 stake)");
         auto cert = gate.assemble_cert(A.block_id);
@@ -98,7 +98,7 @@ int main() {
         VotePosition B{};
         B.block_id.fill(0x42);
         B.height = 101;
-        B.epoch = 7;
+        B.round = 7;
         const auto & item = B.block_id;
 
         // 3 yes-rounds then a split (inconclusive) → confidence resets, undecided.

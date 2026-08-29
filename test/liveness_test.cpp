@@ -28,7 +28,7 @@
 
 #include "lux/consensus2/node.hpp"
 #include "lux/consensus2/quorum_cert_engine.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -53,17 +53,21 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint64_t epoch) {
-    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.epoch = epoch; return p;
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
+    VotePosition p{};
+    p.block_id.fill(tag);
+    p.height = height;
+    p.round  = round;
+    return p;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
     Signature sig{};
-    if (cevm::crypto::bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign"); std::exit(2); }
+    if (bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign"); std::exit(2); }
     return sig;
 }
 struct Bus : VoteTransport {
@@ -90,10 +94,10 @@ int main() {
                           std::uint32_t live, const VotePosition& pos) {
         for (std::uint32_t i = 0; i < live; ++i)
             nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
-                                                   WaveConfig{5, 0.8, 4}, 1, bus));
+                                                   WaveConfig{5, 0.8, 4}, bus));
         for (auto& n : nodes) bus.subs.push_back(n.get());
         for (auto& n : nodes) n->submit(pos);
-        for (int r = 0; r < 4; ++r) for (auto& n : nodes) n->poll(pos, 5, 5);  // β rounds
+        for (int r = 0; r < 4; ++r) for (auto& n : nodes) n->poll(pos.block_id, 5, 5);  // β rounds
     };
 
     // ── [1] DOWN validators: 3 down finalize, 4 down stall (the n/3 boundary) ────

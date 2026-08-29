@@ -10,7 +10,7 @@
 #include "lux/consensus2/node.hpp"
 #include "lux/consensus2/zap/vote_codec.hpp"
 #include "lux/consensus2/zap/zap_vote_transport.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <sys/socket.h>
 
@@ -36,15 +36,15 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t h) {
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
     VotePosition p{};
     p.block_id.fill(tag);
-    p.height = h;
-    p.epoch = 1;
+    p.height = height;
+    p.round  = round;
     return p;
 }
 }  // namespace
@@ -87,9 +87,9 @@ int main() {
 
         std::vector<std::unique_ptr<Node>> A, B;
         for (std::uint32_t i = 0; i < 3; ++i)  // group A: validators 0,1,2
-            A.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 0.8, 4}, 1, txA));
+            A.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 0.8, 4}, txA));
         for (std::uint32_t i = 3; i < 5; ++i)  // group B: validators 3,4
-            B.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 0.8, 4}, 1, txB));
+            B.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 0.8, 4}, txB));
         for (auto & n : A) txA.add_local(n.get());
         for (auto & n : B) txB.add_local(n.get());
 
@@ -100,11 +100,11 @@ int main() {
         // A votes (3 ZAP frames written to the wire); B reads them off the wire.
         // β=4 confirmation rounds — a node signs only on the β-confirmed wave
         // decision (not a single round), so drive the full confidence build.
-        for (int r = 0; r < 4; ++r) for (auto & n : A) n->poll(pos, /*yes=*/5, /*total=*/5);
+        for (int r = 0; r < 4; ++r) for (auto & n : A) n->poll(pos.block_id, /*yes=*/5, /*total=*/5);
         for (int i = 0; i < 3; ++i) check(txB.pump(), "B reads an A vote off the ZAP wire");
 
         // B votes (2 frames); A reads them off the wire.
-        for (int r = 0; r < 4; ++r) for (auto & n : B) n->poll(pos, 5, 5);
+        for (int r = 0; r < 4; ++r) for (auto & n : B) n->poll(pos.block_id, 5, 5);
         for (int i = 0; i < 2; ++i) check(txA.pump(), "A reads a B vote off the ZAP wire");
 
         // Each side now holds all 5 votes — independently final, cert verifies.

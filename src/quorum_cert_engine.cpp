@@ -2,64 +2,75 @@
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
 // quorum_cert_engine.cpp — finality gate implementation. The RULE lives here;
-// the CRYPTO is cevm::crypto::bls (blst-backed, never reinvented).
+// the CRYPTO is lux::consensus2::bls (the Lux consensus vote domain over blst).
 
 #include "lux/consensus2/quorum_cert_engine.hpp"
 
-#include "bls_signature.hpp"  // cevm::crypto::bls — REUSED crypto core (luxcpp/crypto/bls)
+#include "lux/consensus2/bls.hpp"
 
 #include <cstdint>
-#include <cstring>
 #include <stdexcept>
 
 namespace lux::consensus2 {
 
 namespace {
 
-// Big-endian append helpers — fixed-width so the message is length-free and a
-// field can never be confused with its neighbour (canonical, like Go's layout).
+// Big-endian append helpers — fixed-width, so the message is length-free and a
+// field can never be confused with its neighbour (Go's layout).
 void put_be16(std::vector<std::uint8_t>& b, std::uint16_t v) {
     b.push_back(std::uint8_t(v >> 8));
     b.push_back(std::uint8_t(v));
 }
+void put_be32(std::vector<std::uint8_t>& b, std::uint32_t v) {
+    for (int s = 24; s >= 0; s -= 8) b.push_back(std::uint8_t(v >> s));
+}
 void put_be64(std::vector<std::uint8_t>& b, std::uint64_t v) {
     for (int s = 56; s >= 0; s -= 8) b.push_back(std::uint8_t(v >> s));
 }
+void put_id(std::vector<std::uint8_t>& b, const Id& id) {
+    b.insert(b.end(), id.begin(), id.end());
+}
 
-// Domain tag, NUL-terminated as a hard role separator — byte-identical to the Go
-// reference tag so the constructions are recognizably the same family.
-constexpr char kDomainTag[] = "LUX/chain/vote/v1\x00";
-constexpr std::size_t kDomainTagLen = sizeof(kDomainTag) - 1;  // includes the NUL, drops the C terminator
+// Domain tag, NUL-terminated as a hard role separator. v2 == the
+// canonical-commitment layout: the signed identity is the inner execution
+// commitment, never the outer envelope id.
+constexpr char        kDomainTag[]  = "LUX/chain/vote/v2\x00";
+constexpr std::size_t kDomainTagLen = sizeof(kDomainTag) - 1;  // keeps the NUL, drops C's terminator
 
-// Verify one validator's BLS signature over `msg`. Returns true IFF the signature
-// is a valid ACCEPT signature by `voter`. cevm::crypto::bls::verify returns 0 on
-// success, 1 on mismatch, <0 on decode error — anything non-zero is "not valid".
+// Verify one validator's BLS signature over `msg` in the consensus vote domain.
+// bls::verify returns 0 on success, 1 on mismatch, <0 on decode error.
 [[nodiscard]] bool bls_verify(const PubKey& voter,
                               const std::vector<std::uint8_t>& msg,
                               const Signature& sig) noexcept {
-    return cevm::crypto::bls::verify(voter.data(), msg.data(), msg.size(), sig.data()) == 0;
+    return bls::verify(voter.data(), msg.data(), msg.size(), sig.data()) == 0;
 }
 
 }  // namespace
 
-std::uint64_t two_thirds_stake_floor(std::uint64_t total) noexcept {
-    const std::uint64_t q = total / 3;
-    const std::uint64_t r = total % 3;
-    std::uint64_t floor = 2 * q;
-    if (r == 2) ++floor;  // floor(2r/3): r∈{0,1}→0, r==2→1
-    return floor;
+Id canonical_id_of(const VotePosition& pos) noexcept {
+    return pos.canonical_id == kEmptyId ? pos.block_id : pos.canonical_id;
 }
 
-std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos) {
+Id parent_canonical_id_of(const VotePosition& pos) noexcept {
+    return pos.parent_canonical_id == kEmptyId ? pos.parent_id : pos.parent_canonical_id;
+}
+
+std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos, bool accept) {
     std::vector<std::uint8_t> buf;
-    buf.reserve(kDomainTagLen + 2 + 1 + 32 + 8 + 8 + 1);
+    buf.reserve(kDomainTagLen + 2 + 1 + 32 + 8 + 4 + 32 * 5 + 1);
     buf.insert(buf.end(), kDomainTag, kDomainTag + kDomainTagLen);  // domain + NUL
-    put_be16(buf, kQuorumCertVersion);                              // version
-    buf.push_back(kQCFinality);                                     // qc_type (role)
-    buf.insert(buf.end(), pos.block_id.begin(), pos.block_id.end()); // block_id:32
-    put_be64(buf, pos.height);                                      // height:8
-    put_be64(buf, pos.epoch);                                       // epoch:8
-    buf.push_back(0x01);                                            // accept = true
+    put_be16(buf, kQuorumCertVersion);
+    buf.push_back(kQCFinality);
+    put_id(buf, pos.chain_id);
+    put_be64(buf, pos.height);
+    put_be32(buf, pos.round);
+    // Canonical execution identity — the signed primary object. Outer ids omitted.
+    put_id(buf, canonical_id_of(pos));
+    put_id(buf, parent_canonical_id_of(pos));
+    put_id(buf, pos.execution_state_root);
+    put_id(buf, pos.payload_root);
+    put_id(buf, pos.validator_set_root);
+    buf.push_back(accept ? 0x01 : 0x00);
     return buf;
 }
 
@@ -77,12 +88,21 @@ QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators, std::uint3
             throw std::invalid_argument("consensus2: in-set validator has zero stake");
         if (!validators_.emplace(v.pubkey, v.stake).second)
             throw std::invalid_argument("consensus2: duplicate validator pubkey");
-        // Checked add: a wrapped total_stake_ would corrupt the 2/3 floor and is a
-        // safety bug, not a config error. Fail-closed at construction instead.
+        // Checked add: a wrapped total_stake_ would corrupt the stake floors and is a
+        // safety bug, not a config error. Fail closed at construction instead.
         if (total_stake_ > UINT64_MAX - v.stake)
             throw std::invalid_argument("consensus2: total stake overflows uint64");
         total_stake_ += v.stake;
     }
+}
+
+std::uint32_t QuorumCertEngine::signer_floor(Tier tier) const noexcept {
+    return tier == Tier::Quasar ? alpha_ : nova_signer_floor(validator_count());
+}
+
+std::uint64_t QuorumCertEngine::stake_floor(Tier tier) const noexcept {
+    return tier == Tier::Quasar ? two_thirds_stake_floor(total_stake_)
+                                : half_stake_floor(total_stake_);
 }
 
 std::uint64_t QuorumCertEngine::stake_of(const PubKey& voter) const {
@@ -105,6 +125,13 @@ bool QuorumCertEngine::submit(const VotePosition& pos) {
     return true;
 }
 
+std::optional<VotePosition> QuorumCertEngine::position(const BlockId& block_id) const {
+    const std::lock_guard<std::mutex> lock(mu_);
+    const auto it = pending_.find(block_id);
+    if (it == pending_.end()) return std::nullopt;
+    return it->second.pos;
+}
+
 VoteResult QuorumCertEngine::record_vote(const BlockId& block_id,
                                          const PubKey& voter,
                                          const Signature& sig) {
@@ -121,39 +148,22 @@ VoteResult QuorumCertEngine::record_vote(const BlockId& block_id,
     // rejected and can never double-count.
     if (p.votes.find(voter) != p.votes.end()) return VoteResult::Duplicate;
 
-    if (p.verified)
-    {
-        // The quorum is already verified. An extra vote joins only after its own
+    if (p.verified) {
+        // The tally is already verified. An extra vote joins only after its own
         // individual pairing passes, so the "every counted voter is verified"
         // invariant is preserved.
         if (!bls_verify(voter, p.message, sig)) return VoteResult::RejectedBadSignature;
         p.votes.emplace(voter, sig);
         p.voted_stake += stake;
-        return VoteResult::Accepted;
+        return VoteResult::Recorded;
     }
 
-    // Pre-quorum: accept as a CANDIDATE with no per-vote pairing. BLS over the same
-    // message aggregates, so verification is O(1) (one aggregate pairing), not O(α)
-    // individual pairings — done once below the moment the quorum is reachable.
+    // Join as a CANDIDATE with no per-vote pairing. BLS over the same message
+    // aggregates, so verification is O(1) (one aggregate pairing), not O(m)
+    // individual ones — and it runs where the answer is needed: at the gate.
     p.votes.emplace(voter, sig);
     p.voted_stake += stake;
-
-    if (p.votes.size() >= alpha_ && p.voted_stake > two_thirds_stake_floor(total_stake_))
-    {
-        if (batch_verify(p))
-        {
-            p.verified = true;       // ONE pairing certifies the whole quorum
-        }
-        else
-        {
-            evict_invalid(p);        // a forged candidate is here: drop it, verify survivors
-            // Best-effort attribution: if THIS vote was the forged one the quorum
-            // check just caught, report it (it has been evicted and never counted).
-            if (p.votes.find(voter) == p.votes.end())
-                return VoteResult::RejectedBadSignature;
-        }
-    }
-    return VoteResult::Accepted;
+    return VoteResult::Recorded;
 }
 
 bool QuorumCertEngine::batch_verify(const Pending& p) const {
@@ -165,15 +175,20 @@ bool QuorumCertEngine::batch_verify(const Pending& p) const {
         sigs.insert(sigs.end(), sig.begin(), sig.end());
     }
     Signature agg{};
-    if (cevm::crypto::bls::aggregate_sigs(sigs.data(), p.votes.size(), agg.data()) != 0)
+    if (bls::aggregate_sigs(sigs.data(), p.votes.size(), agg.data()) != 0)
         return false;
     // Same canonical message for every voter ⇒ fast_aggregate_verify is one pairing.
-    return cevm::crypto::bls::fast_aggregate_verify(
-               pks.data(), p.votes.size(), p.message.data(), p.message.size(), agg.data()) == 0;
+    return bls::fast_aggregate_verify(pks.data(), p.votes.size(),
+                                      p.message.data(), p.message.size(), agg.data()) == 0;
 }
 
-void QuorumCertEngine::evict_invalid(Pending& p) const {
-    // The aggregate failed ⇒ ≥1 candidate sig is bad. Pay the O(α) individual
+void QuorumCertEngine::verify_tally(Pending& p) const {
+    if (p.verified || p.votes.empty()) return;
+    if (batch_verify(p)) {
+        p.verified = true;  // ONE pairing certifies the whole tally
+        return;
+    }
+    // The aggregate failed ⇒ ≥1 candidate sig is bad. Pay the O(m) individual
     // verify ONLY on this attack path; drop forged sigs and refund their stake.
     for (auto it = p.votes.begin(); it != p.votes.end();) {
         if (!bls_verify(it->first, p.message, it->second)) {
@@ -183,30 +198,35 @@ void QuorumCertEngine::evict_invalid(Pending& p) const {
             ++it;
         }
     }
-    // Survivors are each individually verified; a quorum among them is genuine.
-    if (p.votes.size() >= alpha_ && p.voted_stake > two_thirds_stake_floor(total_stake_))
-        p.verified = true;
+    // Every survivor is now individually verified, so the invariant holds whether or
+    // not the survivors still clear a floor. Marking it settles the tally: this block
+    // has seen forgery, so its later votes pay an individual pairing each rather than
+    // re-running an aggregate that a griefer can keep breaking.
+    p.verified = true;
 }
 
-bool QuorumCertEngine::meets_quorum(const Pending& p) const noexcept {
-    // FAIL-CLOSED: no stake model ⇒ cannot assert a supermajority.
+bool QuorumCertEngine::clears_floors(const Pending& p, Tier tier) const noexcept {
+    // FAIL-CLOSED: no stake model ⇒ no majority of an unknown set can be asserted.
     if (total_stake_ == 0) return false;
-    // VERIFIED: a BLS check covering every counted voter has passed. An unverified
-    // (e.g. forged) candidate can satisfy the count/stake floors but never this —
-    // so it can never drive finality. Set only by the aggregate verify (or the
-    // individual-verify fallback) in record_vote.
-    if (!p.verified) return false;
-    // Count quorum: α distinct voters.
-    if (p.votes.size() < alpha_) return false;
-    // STRICT stake supermajority: voted > floor(2/3·total). Both gates required.
-    if (p.voted_stake <= two_thirds_stake_floor(total_stake_)) return false;
-    return true;
+    if (p.votes.size() < signer_floor(tier)) return false;
+    return p.voted_stake > stake_floor(tier);  // STRICT
 }
 
-bool QuorumCertEngine::is_final(const BlockId& block_id) const {
+bool QuorumCertEngine::meets_quorum(Pending& p, Tier tier) const {
+    // Cheap floors first: below them there is nothing to verify and no pairing is
+    // spent, so an unverified tally is never a way to make the gate do work.
+    if (!clears_floors(p, tier)) return false;
+    // VERIFIED: a BLS check covering every counted voter must have passed. This is
+    // where it runs, once, and where a forged candidate is evicted.
+    verify_tally(p);
+    // Re-check: eviction can drop a tally back below the floors it just cleared.
+    return p.verified && clears_floors(p, tier);
+}
+
+bool QuorumCertEngine::is_final(const BlockId& block_id, Tier tier) const {
     const std::lock_guard<std::mutex> lock(mu_);
     const auto it = pending_.find(block_id);
-    return it != pending_.end() && meets_quorum(it->second);
+    return it != pending_.end() && meets_quorum(it->second, tier);
 }
 
 std::size_t QuorumCertEngine::distinct_voters(const BlockId& block_id) const {
@@ -221,19 +241,21 @@ std::uint64_t QuorumCertEngine::voted_stake(const BlockId& block_id) const {
     return it == pending_.end() ? 0 : it->second.voted_stake;
 }
 
-std::optional<QuorumCert> QuorumCertEngine::assemble_cert(const BlockId& block_id) const {
+std::optional<QuorumCert> QuorumCertEngine::assemble_cert(const BlockId& block_id,
+                                                          Tier tier) const {
     const std::lock_guard<std::mutex> lock(mu_);
     const auto pit = pending_.find(block_id);
-    if (pit == pending_.end() || !meets_quorum(pit->second)) return std::nullopt;
+    if (pit == pending_.end() || !meets_quorum(pit->second, tier)) return std::nullopt;
     const Pending& p = pit->second;
 
     // votes is a std::map keyed by pubkey ⇒ iteration is already strictly-ascending
     // and distinct — exactly the canonical "strictly increasing voter" order.
     QuorumCert cert;
-    cert.version   = kQuorumCertVersion;
-    cert.type      = kQCFinality;
-    cert.position  = p.pos;
-    cert.threshold = alpha_;
+    cert.version     = kQuorumCertVersion;
+    cert.type        = kQCFinality;
+    cert.tier        = tier;
+    cert.position    = p.pos;
+    cert.threshold   = signer_floor(tier);
     cert.voted_stake = p.voted_stake;
     cert.total_stake = total_stake_;
 
@@ -247,8 +269,8 @@ std::optional<QuorumCert> QuorumCertEngine::assemble_cert(const BlockId& block_i
 
     // Aggregate the per-voter G2 signatures into one. All voters signed the SAME
     // canonical message, so the aggregate re-verifies via fast_aggregate_verify.
-    if (cevm::crypto::bls::aggregate_sigs(sigs_flat.data(), cert.voters.size(),
-                                          cert.aggregate_sig.data()) != 0) {
+    if (bls::aggregate_sigs(sigs_flat.data(), cert.voters.size(),
+                            cert.aggregate_sig.data()) != 0) {
         return std::nullopt;  // structurally impossible for verified inputs; fail closed
     }
     return cert;
@@ -257,8 +279,12 @@ std::optional<QuorumCert> QuorumCertEngine::assemble_cert(const BlockId& block_i
 bool QuorumCertEngine::verify_cert(const QuorumCert& cert) const {
     // (1) version + role.
     if (cert.version != kQuorumCertVersion || cert.type != kQCFinality) return false;
-    // (2) threshold matches engine policy and is reachable.
-    if (cert.threshold == 0 || cert.threshold != alpha_) return false;
+    // (2) tier is one of the two attestable rungs, and the cert's self-declared
+    //     threshold matches the floor THIS set derives for that tier. The floor is
+    //     recomputed below regardless — a cert can never talk its way past it.
+    if (cert.tier != Tier::Nova && cert.tier != Tier::Quasar) return false;
+    const std::uint32_t floor_count = signer_floor(cert.tier);
+    if (cert.threshold == 0 || cert.threshold != floor_count) return false;
     // (3) fail-closed on no stake model.
     if (total_stake_ == 0) return false;
     if (cert.voters.empty()) return false;
@@ -272,24 +298,26 @@ bool QuorumCertEngine::verify_cert(const QuorumCert& cert) const {
         if (stake == 0) return false;  // out-of-set voter ⇒ invalid cert
         voted += stake;
     }
-    // (5) α distinct-voter floor.
-    if (cert.voters.size() < cert.threshold) return false;
-    // (6) STRICT 2/3 stake supermajority (recomputed, not trusted from the cert).
-    if (voted <= two_thirds_stake_floor(total_stake_)) return false;
+    // (5) the tier's distinct-voter floor.
+    if (cert.voters.size() < floor_count) return false;
+    // (6) the tier's STRICT stake floor, recomputed — not trusted from the cert.
+    //     A Nova cert relabelled Quasar dies here; a Quasar cert relabelled Nova
+    //     only under-claims.
+    if (voted <= stake_floor(cert.tier)) return false;
 
     // (7) CRYPTO: the aggregate signature verifies over the canonical message under
-    //     the aggregate of the voters' pubkeys. POP ciphersuite ⇒ rogue-key-safe.
+    //     the aggregate of the voters' pubkeys.
     //     PRECONDITION: each validator pubkey admitted to the set MUST have had its
-    //     proof-of-possession verified upstream (P-chain admission). fast_aggregate_verify
-    //     is rogue-key-safe ONLY under that assumption; this gate trusts the admitted set.
+    //     proof-of-possession verified upstream (P-chain admission). Aggregation over
+    //     a common message is sound only under that assumption; this gate trusts the
+    //     admitted set, exactly as the Go engine does.
     const std::vector<std::uint8_t> msg = canonical_vote_message(cert.position);
     std::vector<std::uint8_t> pks_flat;
     pks_flat.reserve(cert.voters.size() * 48);
     for (const auto& pk : cert.voters)
         pks_flat.insert(pks_flat.end(), pk.begin(), pk.end());
-    return cevm::crypto::bls::fast_aggregate_verify(
-               pks_flat.data(), cert.voters.size(),
-               msg.data(), msg.size(), cert.aggregate_sig.data()) == 0;
+    return bls::fast_aggregate_verify(pks_flat.data(), cert.voters.size(),
+                                      msg.data(), msg.size(), cert.aggregate_sig.data()) == 0;
 }
 
 }  // namespace lux::consensus2

@@ -9,7 +9,8 @@
 // Decide when the counter reaches β; a preference switch resets it to one.
 //
 // Ported from luxfi/consensus protocol/wave (+ protocol/focus). Matches the
-// semantics of wave.Tick exactly (threshold = int(K·α); consecutive-or-reset).
+// semantics of wave.Tick exactly: threshold = ceil(K·α) (threshold.hpp's
+// alpha_threshold — the SAME function both sides call), consecutive-or-reset.
 //
 // This is the LIVENESS / preference layer — which item the network is converging
 // on. It carries NO cryptographic weight. Final, cryptographic safety (a signed
@@ -17,6 +18,8 @@
 // wave decides "accept this item"; the gate proves it with real BLS + stake.
 
 #pragma once
+
+#include "lux/consensus2/threshold.hpp"
 
 #include <array>
 #include <cstdint>
@@ -26,10 +29,22 @@ namespace lux::consensus2 {
 
 enum class Decision : std::uint8_t { Undecided = 0, Accept = 1, Reject = 2 };
 
+// β for a set sized by feasible() — Go config.FeasibleParams sets Beta=2: one
+// confirming round of hysteresis, so a transient one-round majority flip cannot
+// decide, without the fragility of a deep β at zero margin.
+inline constexpr std::uint32_t kFeasibleBeta = 2;
+
 struct WaveConfig {
-    std::uint32_t k = 21;        // committee sample size per round
-    double alpha = 0.69;         // supermajority fraction; threshold = int(k·alpha)
-    std::uint32_t beta = 15;     // consecutive successful rounds required to decide
+    std::uint32_t k = 21;                       // committee sample size per round
+    double alpha = kConsensusSuperMajority;     // threshold = ceil(k·alpha)
+    std::uint32_t beta = kFeasibleBeta;         // consecutive rounds required to decide
+
+    // The parameter set a live network of n validators runs — Go
+    // config.FeasibleParams(n): K = max(n, minimal BFT committee), α = the
+    // equal-stake strict-⅔ count as a ratio of K, β = 2. Sizing the committee here
+    // rather than at each call site is what keeps the sampling threshold and the
+    // stake predicate one decision.
+    [[nodiscard]] static WaveConfig feasible(std::uint32_t n) noexcept;
 };
 
 // An item is keyed by the FULL 32-byte block id — never a lossy prefix. Keying on
