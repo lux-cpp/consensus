@@ -1,13 +1,15 @@
 # Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Eco
 #
-# consensus2 seed — the finality GATE, in pure C++23. Builds:
-#   blst (static, from source)  →  bls_signature (cevm::crypto::bls, REUSED)
-#     →  consensus2 (the gate, NEW)  →  toy_stub_killer_test (the acceptance gate)
+# consensus2 — the finality GATE, in pure C++23. Builds:
+#   blst (static, from source)  →  bls_signature (the reused domain-free bodies)
+#     →  consensus2 (the gate + the Lux consensus vote domain)  →  the tests
 #
 # Reused, unmodified, from the luxcpp checkout (NOT vendored here):
 #   ${LUXCPP_ROOT}/blst                 — blst BLS12-381 backend
-#   ${LUXCPP_ROOT}/crypto/bls/cpp       — cevm::crypto::bls IRTF signature surface
+#   ${LUXCPP_ROOT}/crypto/bls/cpp       — cevm::crypto::bls (eth2 POP ciphersuite).
+#     consensus2 uses it ONLY for the operations with no hash-to-curve; the vote
+#     domain is BLS_SIG_..._RO_NUL_ and lives in src/bls.cpp. See bls.hpp.
 
 cmake_minimum_required(VERSION 3.20)
 project(consensus2_seed LANGUAGES C CXX ASM)
@@ -52,63 +54,46 @@ target_include_directories(bls_signature PUBLIC "${BLS_DIR}")
 target_link_libraries(bls_signature PUBLIC blst)
 
 # ── consensus2 — the NEW finality gate (the seed) ─────────────────────────────
-add_library(consensus2 STATIC src/quorum_cert_engine.cpp src/wave.cpp src/node.cpp)
+add_library(consensus2 STATIC
+  src/threshold.cpp src/bls.cpp src/quorum_cert_engine.cpp src/wave.cpp src/node.cpp)
 target_include_directories(consensus2 PUBLIC include)
-target_link_libraries(consensus2 PUBLIC bls_signature)
+# bls_signature carries the reused domain-free bodies; blst carries the curve. The
+# consensus vote domain (src/bls.cpp) needs blst's headers directly — see bls.hpp.
+target_link_libraries(consensus2 PUBLIC bls_signature blst)
 target_compile_options(consensus2 PRIVATE -Wall -Wextra -Wpedantic)
 
-# ── the acceptance gate: the toy-stub-killer test ─────────────────────────────
-add_executable(toy_stub_killer_test test/toy_stub_killer_test.cpp)
-target_link_libraries(toy_stub_killer_test PRIVATE consensus2)
-target_compile_options(toy_stub_killer_test PRIVATE -Wall -Wextra)
-
+# ── tests ─────────────────────────────────────────────────────────────────────
+# ONE list of test names, ONE loop. A new test is one line here: its source is
+# test/<name>_test.cpp, its target <name>_test, its ctest name <name>. The
+# sanitizer block below reads the SAME list, so a test can never be instrumented
+# in one place and forgotten in another.
 enable_testing()
-add_test(NAME toy_stub_killer COMMAND toy_stub_killer_test)
 
-add_executable(poll_driver_test test/poll_driver_test.cpp)
-target_link_libraries(poll_driver_test PRIVATE consensus2)
-target_compile_options(poll_driver_test PRIVATE -Wall -Wextra)
-add_test(NAME poll_driver COMMAND poll_driver_test)
+set(CONSENSUS2_TESTS
+  toy_stub_killer      # the acceptance gate: no toy stub survives it
+  poll_driver
+  engine_integration
+  multi_node
+  batch_verify_attack
+  no_double_finalize   # agreement: no two conflicting blocks finalize at a height
+  liveness
+  out_of_turn)         # the acceptance window
 
-add_executable(engine_integration_test test/engine_integration_test.cpp)
-target_link_libraries(engine_integration_test PRIVATE consensus2)
-target_compile_options(engine_integration_test PRIVATE -Wall -Wextra)
-add_test(NAME engine_integration COMMAND engine_integration_test)
-
-add_executable(multi_node_test test/multi_node_test.cpp)
-target_link_libraries(multi_node_test PRIVATE consensus2)
-target_compile_options(multi_node_test PRIVATE -Wall -Wextra)
-add_test(NAME multi_node COMMAND multi_node_test)
-
-add_executable(batch_verify_attack_test test/batch_verify_attack_test.cpp)
-target_link_libraries(batch_verify_attack_test PRIVATE consensus2)
-target_compile_options(batch_verify_attack_test PRIVATE -Wall -Wextra)
-add_test(NAME batch_verify_attack COMMAND batch_verify_attack_test)
-
-# ── BFT parity gap tests: agreement (no double finalize), liveness, acceptance window
-add_executable(no_double_finalize_test test/no_double_finalize_test.cpp)
-target_link_libraries(no_double_finalize_test PRIVATE consensus2)
-target_compile_options(no_double_finalize_test PRIVATE -Wall -Wextra)
-add_test(NAME no_double_finalize COMMAND no_double_finalize_test)
-
-add_executable(liveness_test test/liveness_test.cpp)
-target_link_libraries(liveness_test PRIVATE consensus2)
-target_compile_options(liveness_test PRIVATE -Wall -Wextra)
-add_test(NAME liveness COMMAND liveness_test)
-
-add_executable(out_of_turn_test test/out_of_turn_test.cpp)
-target_link_libraries(out_of_turn_test PRIVATE consensus2)
-target_compile_options(out_of_turn_test PRIVATE -Wall -Wextra)
-add_test(NAME out_of_turn COMMAND out_of_turn_test)
-
-# ZAP vote transport — votes over the canonical ZAP wire codec (zap-cpp-core).
-# Gated on -DZAP_DIR (the zap-cpp-core include root); core consensus2 has no ZAP dep.
+# The ZAP vote transport rides zap-cpp-core, so it is gated on -DZAP_DIR; core
+# consensus2 has no ZAP dependency.
 if (ZAP_DIR)
-    add_executable(zap_vote_transport_test test/zap_vote_transport_test.cpp)
-    target_include_directories(zap_vote_transport_test PRIVATE "${ZAP_DIR}")
-    target_link_libraries(zap_vote_transport_test PRIVATE consensus2)
-    target_compile_options(zap_vote_transport_test PRIVATE -Wall -Wextra)
-    add_test(NAME zap_vote_transport COMMAND zap_vote_transport_test)
+  list(APPEND CONSENSUS2_TESTS zap_vote_transport)
+endif()
+
+foreach(_t ${CONSENSUS2_TESTS})
+  add_executable(${_t}_test test/${_t}_test.cpp)
+  target_link_libraries(${_t}_test PRIVATE consensus2)
+  target_compile_options(${_t}_test PRIVATE -Wall -Wextra)
+  add_test(NAME ${_t} COMMAND ${_t}_test)
+endforeach()
+
+if (ZAP_DIR)
+  target_include_directories(zap_vote_transport_test PRIVATE "${ZAP_DIR}")
 endif()
 
 # Apply the requested sanitizer to consensus2's OWN targets only (blst/bls stay
@@ -116,12 +101,10 @@ endif()
 # the same instrumentation, the reused crypto none.
 if (CONSENSUS2_SANITIZE)
     set(_c2_san -fsanitize=${CONSENSUS2_SANITIZE} -fno-omit-frame-pointer)
-    set(_c2_targets consensus2 toy_stub_killer_test poll_driver_test
-        engine_integration_test multi_node_test batch_verify_attack_test
-        no_double_finalize_test liveness_test out_of_turn_test)
-    if (ZAP_DIR)
-        list(APPEND _c2_targets zap_vote_transport_test)
-    endif()
+    set(_c2_targets consensus2)
+    foreach(_t ${CONSENSUS2_TESTS})
+        list(APPEND _c2_targets ${_t}_test)
+    endforeach()
     foreach(_t ${_c2_targets})
         target_compile_options(${_t} PRIVATE ${_c2_san})
         target_link_options(${_t} PRIVATE ${_c2_san})

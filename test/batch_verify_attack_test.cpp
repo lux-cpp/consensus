@@ -9,7 +9,7 @@
 // validly signed (block,height,epoch). The attacker holds in-set, POP'd keys.
 
 #include "lux/consensus2/quorum_cert_engine.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -30,14 +30,20 @@ Key make_key(std::uint8_t tag) {
     std::array<std::uint8_t, 32> seed{}; seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk2pk"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk2pk"); std::exit(2); }
     return k;
 }
-BlockId blk(std::uint8_t t) { BlockId b{}; b.fill(t); return b; }
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
+    VotePosition p{};
+    p.block_id.fill(tag);
+    p.height = height;
+    p.round  = round;
+    return p;
+}
 Signature sign(const Key& k, const VotePosition& p) {
     auto m = canonical_vote_message(p); Signature s{};
-    if (cevm::crypto::bls::sign(k.sk.data(), m.data(), m.size(), s.data()) != 0) { std::puts("sign"); std::exit(2); }
+    if (bls::sign(k.sk.data(), m.data(), m.size(), s.data()) != 0) { std::puts("sign"); std::exit(2); }
     return s;
 }
 }  // namespace
@@ -53,8 +59,8 @@ int main() {
     //      by k3, but over a DIFFERENT position. Must be caught at quorum, evicted.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x41), 100, 7};
-        const VotePosition OTHER{blk(0x42), 100, 7};  // different block id, same height/epoch
+        const VotePosition P = make_pos(0x41, 100, 7);
+        const VotePosition OTHER = make_pos(0x42, 100, 7);  // different block id, same height/epoch
         e.submit(P);
         for (int i = 0; i < 3; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
         // k3 signs OTHER (a genuine sig, but wrong position) and offers it for P.
@@ -70,7 +76,7 @@ int main() {
     //      aggregate that verifies is the genuine sum — so this must NOT finalize.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x43), 101, 7};
+        const VotePosition P = make_pos(0x43, 101, 7);
         e.submit(P);
         (void)e.record_vote(P.block_id, keys[0].pk, sign(keys[0], P));  // genuine
         (void)e.record_vote(P.block_id, keys[1].pk, sign(keys[1], P));  // genuine
@@ -87,7 +93,7 @@ int main() {
     // A3 — identity/zero signature from an in-set validator.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x44), 102, 7};
+        const VotePosition P = make_pos(0x44, 102, 7);
         e.submit(P);
         for (int i = 0; i < 3; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
         Signature zero{};  // all-zero "signature"
@@ -99,7 +105,7 @@ int main() {
     //      genuine must finalize; the forged must NOT be in the cert.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x45), 103, 7};
+        const VotePosition P = make_pos(0x45, 103, 7);
         e.submit(P);
         for (int i = 0; i < 4; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
         check(e.is_final(P.block_id), "A4: 4 genuine votes finalize");
@@ -114,7 +120,7 @@ int main() {
     // A5 — stake-refund exactness after MULTIPLE evictions in one quorum check.
     {
         QuorumCertEngine e(set, 4);
-        const VotePosition P{blk(0x46), 104, 7};
+        const VotePosition P = make_pos(0x46, 104, 7);
         e.submit(P);
         (void)e.record_vote(P.block_id, keys[0].pk, sign(keys[0], P));   // genuine
         Signature f1 = sign(keys[1], P); f1[5] ^= 0x01;                  // forged

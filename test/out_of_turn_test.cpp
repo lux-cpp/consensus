@@ -26,7 +26,7 @@
 // it does not change them. See the report's decomplection note.)
 
 #include "lux/consensus2/quorum_cert_engine.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -50,17 +50,21 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint64_t epoch) {
-    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.epoch = epoch; return p;
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
+    VotePosition p{};
+    p.block_id.fill(tag);
+    p.height = height;
+    p.round  = round;
+    return p;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
     Signature sig{};
-    if (cevm::crypto::bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign"); std::exit(2); }
+    if (bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign"); std::exit(2); }
     return sig;
 }
 
@@ -85,38 +89,39 @@ int main() {
         check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::RejectedNoSuchBlock,
               "EARLY: valid vote before submit() ⇒ RejectedNoSuchBlock (window closed)");
         check(e.submit(P), "submit opens the window");
-        check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::Accepted,
+        check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::Recorded,
               "after submit the same vote is Accepted (window open)");
         std::printf("[1/4] no early acceptance: a vote is collectible only after submit       => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
     }
 
     // ── [2] FULLY BOUND: a STALE sig (signed for another position) cannot be lifted ─
-    //   NOTE the gate's O(1) batch-verify model: pre-quorum votes are CANDIDATES
-    //   (no per-vote pairing); the BLS check runs once the count+stake quorum is
-    //   reachable, evicting every sig that does not verify for THIS position. So a
-    //   stale sig can sit as a candidate but can NEVER reach finality — at the
-    //   quorum check it is rejected and evicted. We drive exactly that and assert
-    //   the position never finalizes and no stale candidate survives.
+    //   NOTE the gate's O(1) batch-verify model: votes are CANDIDATES (no per-vote
+    //   pairing) until the GATE is asked; the BLS check runs there, once, evicting
+    //   every sig that does not verify for THIS position. So a stale sig can sit as
+    //   a candidate but can NEVER reach finality — asking the gate is what rejects
+    //   and evicts it. We drive exactly that and assert the position never
+    //   finalizes and no stale candidate survives.
     {
         const int b = g_fail;
         QuorumCertEngine e(set, 4);
         const VotePosition P  = make_pos(0x42, 20, 1);   // the open position
         e.submit(P);
         // Four in-set validators each sign a DIFFERENT canonical position and offer
-        // it for P (domain-separated message binds block_id, height, epoch). Four
-        // votes (80 stake) reach the quorum check, which verifies and rejects all.
+        // it for P (the domain-separated message binds every axis). Four votes (80
+        // stake) clear the floors, so asking the gate verifies — and rejects all.
         const VotePosition diffHeight = make_pos(0x42, 21, 1);  // stale: another height
-        const VotePosition diffEpoch  = make_pos(0x42, 20, 2);  // another epoch (set era)
+        const VotePosition diffRound  = make_pos(0x42, 20, 2);  // another round
         const VotePosition diffBlock  = make_pos(0x99, 20, 1);  // another block id
         const VotePosition diffAll    = make_pos(0x77, 99, 9);  // nothing in common
-        (void)e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], diffHeight));
-        (void)e.record_vote(P.block_id, keys[1].pk, sign_vote(keys[1], diffEpoch));
+        check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], diffHeight)) == VoteResult::Recorded,
+              "a stale sig JOINS as a candidate — recorded is not verified");
+        (void)e.record_vote(P.block_id, keys[1].pk, sign_vote(keys[1], diffRound));
         (void)e.record_vote(P.block_id, keys[2].pk, sign_vote(keys[2], diffBlock));
-        check(e.record_vote(P.block_id, keys[3].pk, sign_vote(keys[3], diffAll)) == VoteResult::RejectedBadSignature,
-              "the stale vote that reaches the quorum check ⇒ RejectedBadSignature");
+        (void)e.record_vote(P.block_id, keys[3].pk, sign_vote(keys[3], diffAll));
+        check(e.distinct_voters(P.block_id) == 4, "all four candidates are held, unverified");
         check(!e.is_final(P.block_id), "STALE sigs never finalize the open position (not liftable)");
-        check(e.distinct_voters(P.block_id) == 0, "every stale candidate evicted at the quorum check");
+        check(e.distinct_voters(P.block_id) == 0, "every stale candidate evicted AT THE GATE");
         check(!e.assemble_cert(P.block_id).has_value(), "no cert from cross-position sigs");
         std::printf("[2/4] stale/cross-position sigs are not liftable onto the open position  => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
@@ -133,11 +138,14 @@ int main() {
         Key outsider = make_key(0xEE);
         check(e.record_vote(P.block_id, outsider.pk, sign_vote(outsider, P)) == VoteResult::RejectedUnknownValidator,
               "OUT-OF-SET voter ⇒ RejectedUnknownValidator");
-        // forged: an in-set key with a corrupted signature, recorded at the quorum.
+        // forged: an in-set key with a corrupted signature padding the quorum.
         for (int i = 0; i < 3; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
         Signature forged = sign_vote(keys[3], P); forged[20] ^= 0x01;
-        check(e.record_vote(P.block_id, keys[3].pk, forged) == VoteResult::RejectedBadSignature,
-              "FORGED sig padding the quorum ⇒ RejectedBadSignature (evicted)");
+        (void)e.record_vote(P.block_id, keys[3].pk, forged);
+        // The count and stake floors are now met — by a tally one of whose sigs is
+        // forged. Asking the gate verifies, evicts it, and refuses.
+        check(!e.is_final(P.block_id), "FORGED sig padding the quorum does NOT finalize");
+        check(e.distinct_voters(P.block_id) == 3, "the forged vote is evicted at the gate");
         // sub-quorum: 3 genuine (60 stake, <α and ≤66) ⇒ no cert.
         check(!e.is_final(P.block_id), "SUB-QUORUM (3 votes / 60 stake) ⇒ not final, no cert");
         check(!e.assemble_cert(P.block_id).has_value(), "no cert for a sub-quorum block");

@@ -47,7 +47,7 @@
 
 #include "lux/consensus2/node.hpp"
 #include "lux/consensus2/quorum_cert_engine.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -72,17 +72,21 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint64_t epoch) {
-    VotePosition p{}; p.block_id.fill(tag); p.height = height; p.epoch = epoch; return p;
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
+    VotePosition p{};
+    p.block_id.fill(tag);
+    p.height = height;
+    p.round  = round;
+    return p;
 }
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
     Signature sig{};
-    if (cevm::crypto::bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign"); std::exit(2); }
+    if (bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) { std::puts("sign"); std::exit(2); }
     return sig;
 }
 
@@ -159,7 +163,7 @@ int main() {
             check(e->is_final(B1.block_id) && e->is_final(B2.block_id),
                   "f=4: ⌈n/3⌉ equivocators CAN double-finalize — bound is exactly avalanche's n/3");
         }
-        std::printf("[1/3] gate quorum-intersection: f=3 safe (exhaustive), f=4 breaks (tight) => %s\n",
+        std::printf("[1/5] gate quorum-intersection: f=3 safe (exhaustive), f=4 breaks (tight) => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
     }
 
@@ -167,7 +171,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, 1, bus);
+        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
         bus.subs.push_back(&node);
         const VotePosition B1 = make_pos(0xB1, 9, 1);
         const VotePosition B2 = make_pos(0xB2, 9, 1);  // sibling: same (height,epoch)
@@ -175,15 +179,15 @@ int main() {
 
         // Drive B1 to a β-confirmed ACCEPT (it commits slot (9,1)→B1 and broadcasts),
         // THEN drive B2 to a β-confirmed ACCEPT. An honest node must REFUSE B2.
-        for (int r = 0; r < 4; ++r) node.poll(B1, 5, 5);
-        for (int r = 0; r < 4; ++r) node.poll(B2, 5, 5);
+        for (int r = 0; r < 4; ++r) node.poll(B1.block_id, 5, 5);
+        for (int r = 0; r < 4; ++r) node.poll(B2.block_id, 5, 5);
 
         check(bus.broadcasts.size() == 1, "honest node broadcasts EXACTLY ONE vote for the slot");
         check(!bus.broadcasts.empty() && bus.broadcasts[0].block_id == B1.block_id,
               "the single vote is for B1 (the first slot commitment), never the sibling B2");
         // and its own gate reflects only the one self-vote (1 distinct voter each).
         check(node.cert(B1.block_id).has_value() == false, "no cert yet (only its own 1 vote)");
-        std::printf("[2/3] honest node fed two siblings signs exactly one (non-equivocation) => %s\n",
+        std::printf("[2/5] honest node fed two siblings signs exactly one (non-equivocation) => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
     }
 
@@ -195,7 +199,7 @@ int main() {
         std::vector<std::unique_ptr<Node>> honest;
         for (std::uint32_t i = 3; i < kN; ++i)
             honest.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
-                                                    WaveConfig{5, 0.8, 4}, 1, bus));
+                                                    WaveConfig{5, 0.8, 4}, bus));
         for (auto& n : honest) bus.subs.push_back(n.get());
 
         const VotePosition B1 = make_pos(0xB1, 12, 1);
@@ -210,8 +214,8 @@ int main() {
             const bool prefersB1 = idx < 4;  // first 4 honest → B1, last 3 → B2
             const VotePosition& first  = prefersB1 ? B1 : B2;
             const VotePosition& second = prefersB1 ? B2 : B1;
-            for (int r = 0; r < 4; ++r) n->poll(first, 5, 5);   // commit this slot
-            for (int r = 0; r < 4; ++r) n->poll(second, 5, 5);  // guard refuses the sibling
+            for (int r = 0; r < 4; ++r) n->poll(first.block_id, 5, 5);   // commit this slot
+            for (int r = 0; r < 4; ++r) n->poll(second.block_id, 5, 5);  // guard refuses the sibling
         }
 
         // The 3 Byzantine validators equivocate: each injects a valid vote for BOTH
@@ -241,7 +245,7 @@ int main() {
         check(certs_agree, "all honest nodes assemble the IDENTICAL verifying cert (single head)");
         check(head.has_value() && head->voters.size() == kAlpha && head->voted_stake == kAlpha * kStake,
               "the head cert carries exactly 7 voters / 70 stake (4 honest + 3 Byzantine)");
-        std::printf("[3/3] 10 nodes, 3 equivocators (f<n/3): exactly one head commits      => %s\n",
+        std::printf("[3/5] 10 nodes, 3 equivocators (f<n/3): exactly one head commits      => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
     }
 
@@ -256,13 +260,13 @@ int main() {
         // at one height, the fresh-net fatal.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, 1, bus);
+            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition B1 = make_pos(0xB1, 9, 1);
             const VotePosition B2 = make_pos(0xB2, 9, 2);  // SAME height, DIFFERENT epoch
             node.submit(B1); node.submit(B2);
-            for (int r = 0; r < 4; ++r) node.poll(B1, 5, 5);  // commit height 9 → B1
-            for (int r = 0; r < 4; ++r) node.poll(B2, 5, 5);  // must REFUSE (height 9 taken)
+            for (int r = 0; r < 4; ++r) node.poll(B1.block_id, 5, 5);  // commit height 9 → B1
+            for (int r = 0; r < 4; ++r) node.poll(B2.block_id, 5, 5);  // must REFUSE (height 9 taken)
             check(bus.broadcasts.size() == 1,
                   "[4a] height-only slot: a different-EPOCH sibling at the same height is refused");
             check(!bus.broadcasts.empty() && bus.broadcasts[0].block_id == B1.block_id,
@@ -274,37 +278,91 @@ int main() {
         // durable decided-height gate. A higher OPEN height stays signable.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, 1, bus);
+            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition A    = make_pos(0xA1, 20, 1);  // the winner at height 20
             const VotePosition Bsib = make_pos(0xB2, 20, 2);  // losing sibling at 20 (diff id+epoch)
             const VotePosition C    = make_pos(0xC3, 22, 1);  // a higher, still-open height
             node.submit(A); node.submit(Bsib); node.submit(C);
 
-            for (int r = 0; r < 4; ++r) node.poll(A, 5, 5);   // commit height 20 → A (1 broadcast)
+            for (int r = 0; r < 4; ++r) node.poll(A.block_id, 5, 5);   // commit height 20 → A (1 broadcast)
             check(bus.broadcasts.size() == 1, "[4b] node signs the winner A at height 20");
 
             // Height 20 is decided. GC is STRICTLY BELOW 20, so slot{20} is retained (belt);
             // the decided-height gate refuses height 20 regardless (durable).
             node.mark_finalized_through(20);
-            for (int r = 0; r < 4; ++r) node.poll(Bsib, 5, 5);
+            for (int r = 0; r < 4; ++r) node.poll(Bsib.block_id, 5, 5);
             check(bus.broadcasts.size() == 1,
                   "[4b] sibling at the just-decided height 20 is refused (gate + retained slot)");
 
             // Advance the frontier to 21: slot{20} is now GC'd. ONLY the decided-height gate
             // protects height 20 — the sibling must STILL be refused (prune-then-resign closed).
             node.mark_finalized_through(21);
-            for (int r = 0; r < 4; ++r) node.poll(Bsib, 5, 5);
+            for (int r = 0; r < 4; ++r) node.poll(Bsib.block_id, 5, 5);
             check(bus.broadcasts.size() == 1,
                   "[4b] sibling refused at decided height 20 even AFTER its slot is GC'd (durable gate)");
 
             // A higher OPEN height (22 > frontier 21) remains signable — no liveness loss.
-            for (int r = 0; r < 4; ++r) node.poll(C, 5, 5);
+            for (int r = 0; r < 4; ++r) node.poll(C.block_id, 5, 5);
             check(bus.broadcasts.size() == 2 && bus.broadcasts.back().block_id == C.block_id,
                   "[4b] a height above the decided frontier is still signable (gate never stalls progress)");
         }
 
-        std::printf("[4/4] height-only slot + finalize-then-resign: sibling refused, tip signable => %s\n",
+        std::printf("[4/5] height-only slot + finalize-then-resign: sibling refused, tip signable => %s\n",
+                    g_fail == b ? "PASS" : "FAIL");
+    }
+
+    // ── [5] THE SLOT IS THE REGISTERED POSITION'S, NOT THE CALLER'S ─────────────
+    //   A node used to be polled with a caller-supplied VotePosition, and it signed
+    //   and slotted THAT one. A caller that submitted a block at height 7 and then
+    //   polled it with a position claiming height 9 made the node sign a vote its
+    //   own gate would evict AND permanently burn its height-9 slot, so the real
+    //   block at 9 could never collect that node's vote. Fail-closed on safety, a
+    //   self-inflicted liveness loss all the same.
+    //
+    //   poll() now names the block by ID alone and reads the position back from the
+    //   gate, so the mismatch is not something to defend against — it cannot be
+    //   expressed. What is left to check is that the property actually holds: the
+    //   vote lands at the REGISTERED height, an unregistered block decides nothing,
+    //   and a later block at another height is unaffected.
+    {
+        const int b = g_fail;
+        Bus bus;
+        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 0.8, 4}, bus);
+        bus.subs.push_back(&node);
+
+        const VotePosition at7 = make_pos(0xA1, 7, 1);
+        const VotePosition at9 = make_pos(0xA9, 9, 1);
+        node.submit(at7);
+
+        // A block nobody opened decides nothing and broadcasts nothing.
+        BlockId unopened{};
+        unopened.fill(0xEE);
+        for (int r = 0; r < 4; ++r)
+            check(node.poll(unopened, 5, 5) == Decision::Undecided,
+                  "[5] an unregistered block is Undecided — no wave state, no vote");
+        check(bus.broadcasts.empty(), "[5] and broadcasts nothing");
+
+        // The registered block signs at its OWN height, and the vote verifies there.
+        for (int r = 0; r < 4; ++r) node.poll(at7.block_id, 5, 5);
+        check(bus.broadcasts.size() == 1 && bus.broadcasts[0].block_id == at7.block_id,
+              "[5] the registered block is signed exactly once");
+        {
+            QuorumCertEngine probe(set, kAlpha);
+            probe.submit(at7);
+            check(probe.record_vote(at7.block_id, keys[0].pk, bus.broadcasts[0].sig) ==
+                      VoteResult::Recorded,
+                  "[5] the vote was cast over the position submit() registered");
+            check(probe.distinct_voters(at7.block_id) == 1, "[5] and it is counted there");
+        }
+
+        // Height 9 was never touched by the height-7 poll: it is still fully signable.
+        node.submit(at9);
+        for (int r = 0; r < 4; ++r) node.poll(at9.block_id, 5, 5);
+        check(bus.broadcasts.size() == 2 && bus.broadcasts.back().block_id == at9.block_id,
+              "[5] a later height is unburned — the slot belongs to the vote actually cast");
+
+        std::printf("[5/5] poll signs the REGISTERED position: no foreign slot is burnable  => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
     }
 

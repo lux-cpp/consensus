@@ -8,7 +8,7 @@
 // certificate. Includes a Byzantine validator and a sub-supermajority case.
 
 #include "lux/consensus2/node.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -32,8 +32,8 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk"); std::exit(2); }
     return k;
 }
 
@@ -47,11 +47,11 @@ struct Bus : VoteTransport {
     }
 };
 
-VotePosition make_pos(std::uint8_t tag, std::uint64_t height) {
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
     VotePosition p{};
     p.block_id.fill(tag);
     p.height = height;
-    p.epoch = 1;
+    p.round  = round;
     return p;
 }
 }  // namespace
@@ -68,7 +68,7 @@ int main() {
     auto make_nodes = [&](Bus & bus, std::vector<std::unique_ptr<Node>> & nodes) {
         for (std::uint32_t i = 0; i < 5; ++i)
             nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, /*alpha=*/4,
-                                                   WaveConfig{5, 0.8, 4}, /*epoch=*/1, bus));
+                                                   WaveConfig{5, 0.8, 4}, bus));
         for (auto & n : nodes) bus.subs.push_back(n.get());
     };
 
@@ -81,7 +81,7 @@ int main() {
         for (auto & n : nodes) n->submit(pos);
         // β rounds; each node sees a 5/5 sample, votes once, broadcasts to all.
         for (int r = 0; r < 4; ++r)
-            for (auto & n : nodes) n->poll(pos, /*yes=*/5, /*total=*/5);
+            for (auto & n : nodes) n->poll(pos.block_id, /*yes=*/5, /*total=*/5);
 
         bool all_final = true, all_verify = true;
         std::optional<QuorumCert> first = nodes[0]->cert(pos.block_id);
@@ -110,8 +110,8 @@ int main() {
 
         // Honest nodes 0..3 vote for `real`; Byzantine node 4 votes only for `forged`.
         for (int r = 0; r < 4; ++r) {
-            for (int i = 0; i < 4; ++i) nodes[i]->poll(real, 5, 5);
-            nodes[4]->poll(forged, 5, 5);   // equivocating / wrong-block vote
+            for (int i = 0; i < 4; ++i) nodes[i]->poll(real.block_id, 5, 5);
+            nodes[4]->poll(forged.block_id, 5, 5);   // equivocating / wrong-block vote
         }
         bool honest_final = true;
         for (int i = 0; i < 4; ++i) honest_final &= nodes[i]->isFinal(real.block_id);
@@ -131,7 +131,7 @@ int main() {
         const VotePosition pos = make_pos(0x43, 3);
         for (auto & n : nodes) n->submit(pos);
         for (int r = 0; r < 4; ++r)
-            for (int i = 0; i < 3; ++i) nodes[i]->poll(pos, 5, 5);  // only 3 vote
+            for (int i = 0; i < 3; ++i) nodes[i]->poll(pos.block_id, 5, 5);  // only 3 vote
         bool any_final = false;
         for (auto & n : nodes) any_final |= n->isFinal(pos.block_id);
         check(!any_final, "no node finalizes with only 60/100 stake (≤ 2/3 floor)");

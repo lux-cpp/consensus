@@ -18,7 +18,7 @@
 // Exits non-zero on ANY failed assertion.
 
 #include "lux/consensus2/quorum_cert_engine.hpp"
-#include "bls_signature.hpp"
+#include "lux/consensus2/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -56,8 +56,8 @@ Key make_key(std::uint8_t tag) {
     seed[0] = tag;
     for (int i = 1; i < 32; ++i) seed[i] = std::uint8_t(0xA5 ^ (tag + i));
     Key k;
-    if (cevm::crypto::bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen failed"); std::exit(2); }
-    if (cevm::crypto::bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk failed"); std::exit(2); }
+    if (bls::keygen(seed.data(), k.sk.data()) != 0) { std::puts("keygen failed"); std::exit(2); }
+    if (bls::sk_to_pk(k.sk.data(), k.pk.data()) != 0) { std::puts("sk_to_pk failed"); std::exit(2); }
     return k;
 }
 
@@ -66,12 +66,19 @@ BlockId make_block(std::uint8_t tag) {
     b.fill(tag);
     return b;
 }
+VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t round = 0) {
+    VotePosition p{};
+    p.block_id = make_block(tag);
+    p.height   = height;
+    p.round    = round;
+    return p;
+}
 
 // Produce a real ACCEPT signature by `key` over the canonical message of `pos`.
 Signature sign_vote(const Key& key, const VotePosition& pos) {
     const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
     Signature sig{};
-    if (cevm::crypto::bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) {
+    if (bls::sign(key.sk.data(), msg.data(), msg.size(), sig.data()) != 0) {
         std::puts("sign failed"); std::exit(2);
     }
     return sig;
@@ -106,10 +113,10 @@ int main() {
     banner(1, "α distinct votes with >2/3 stake FINALIZE");
     bool s1 = true;
     {
-        const VotePosition A{make_block(0x41), /*height=*/100, /*epoch=*/7};
+        const VotePosition A = make_pos(0x41, 100, 7);
         s1 &= check(engine.submit(A), "submit(A)");
         for (int i = 0; i < 4; ++i)  // validators 0..3 → 4 distinct, 80 stake
-            s1 &= check(engine.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A)) == VoteResult::Accepted,
+            s1 &= check(engine.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A)) == VoteResult::Recorded,
                         "validator " + std::to_string(i) + " ACCEPT recorded");
         s1 &= check(engine.distinct_voters(A.block_id) == 4, "4 distinct voters");
         s1 &= check(engine.voted_stake(A.block_id) == 80, "summed stake == 80 (>66)");
@@ -121,7 +128,7 @@ int main() {
     banner(2, "the aggregate quorum cert RE-VERIFIES (and tamper is caught)");
     bool s2 = true;
     {
-        const VotePosition A{make_block(0x42), /*height=*/100, /*epoch=*/7};
+        const VotePosition A = make_pos(0x42, 100, 7);
         s2 &= check(engine.submit(A), "submit(A2)");
         for (int i = 0; i < 4; ++i)
             (void)engine.record_vote(A.block_id, keys[i].pk, sign_vote(keys[i], A));
@@ -146,10 +153,10 @@ int main() {
     banner(3, "ONE validator's vote replayed 5× does NOT finalize (dedup)");
     bool s3 = true;
     {
-        const VotePosition B{make_block(0x43), /*height=*/101, /*epoch=*/7};
+        const VotePosition B = make_pos(0x43, 101, 7);
         s3 &= check(engine.submit(B), "submit(B)");
         const Signature v0 = sign_vote(keys[0], B);
-        s3 &= check(engine.record_vote(B.block_id, keys[0].pk, v0) == VoteResult::Accepted,
+        s3 &= check(engine.record_vote(B.block_id, keys[0].pk, v0) == VoteResult::Recorded,
                     "first vote Accepted");
         int dups = 0;
         for (int i = 0; i < 4; ++i)  // replay the SAME pubkey+sig 4 more times
@@ -167,7 +174,7 @@ int main() {
     bool s4 = true;
     {
         // 4a: 3 distinct equal-stake voters — BOTH gates fail (3<4 and 60<=66).
-        const VotePosition C{make_block(0x44), 102, 7};
+        const VotePosition C = make_pos(0x44, 102, 7);
         s4 &= check(engine.submit(C), "submit(C)");
         for (int i = 0; i < 3; ++i)
             (void)engine.record_vote(C.block_id, keys[i].pk, sign_vote(keys[i], C));
@@ -183,7 +190,7 @@ int main() {
             {sk_keys[3].pk, 10}, {sk_keys[4].pk, 60},  // total 100, floor 66
         };
         QuorumCertEngine skewed_engine(skewed, /*alpha=*/3);
-        const VotePosition D{make_block(0x45), 103, 9};
+        const VotePosition D = make_pos(0x45, 103, 9);
         s4 &= check(skewed_engine.submit(D), "submit(D) on skewed engine");
         for (int i = 0; i < 3; ++i)  // the 3 low-stake validators: count 3>=α, stake 30
             (void)skewed_engine.record_vote(D.block_id, sk_keys[i].pk, sign_vote(sk_keys[i], D));
@@ -199,14 +206,14 @@ int main() {
     verdict(4, s4);
 
     // ── [5/5] forged sigs NEVER drive finality (O(1) batch-verify path) ──────
-    //   Verification is deferred to ONE aggregate pairing at quorum (not α
-    //   individual pairings). The toy-stub-killer property is unchanged in
+    //   Verification is ONE aggregate pairing at the GATE (not α individual
+    //   pairings on the receive path). The toy-stub-killer property is unchanged in
     //   substance: a forged sig can pad the count/stake but is caught and evicted
-    //   at the quorum check, so it can never finalize; only genuine sigs do.
-    banner(5, "forged BLS sigs are evicted at quorum — never finalize");
+    //   when finality is asked, so it can never finalize; only genuine sigs do.
+    banner(5, "forged BLS sigs are evicted at the gate — never finalize");
     bool s5 = true;
     {
-        const VotePosition E{make_block(0x46), 104, 7};
+        const VotePosition E = make_pos(0x46, 104, 7);
         s5 &= check(engine.submit(E), "submit(E)");
 
         // Out-of-set + unknown-block are cheap checks, still rejected per-vote.
@@ -218,22 +225,22 @@ int main() {
 
         // 3 GENUINE votes (k0,k1,k2) — below the α=4 quorum, so no verify yet.
         for (int i = 0; i < 3; ++i)
-            s5 &= check(engine.record_vote(E.block_id, keys[i].pk, sign_vote(keys[i], E)) == VoteResult::Accepted,
+            s5 &= check(engine.record_vote(E.block_id, keys[i].pk, sign_vote(keys[i], E)) == VoteResult::Recorded,
                         "genuine candidate " + std::to_string(i) + " accepted");
         s5 &= check(!engine.is_final(E.block_id), "3 votes (60 stake) not final");
 
-        // 4th vote is FORGED (k3): count→4 and stake→80 reach quorum, so the
-        // aggregate verify runs, FAILS, and evicts the forged vote.
+        // 4th vote is FORGED (k3): count→4 and stake→80 clear the floors, so asking
+        // the gate runs the aggregate verify, which FAILS and evicts the forged vote.
         Signature forged = sign_vote(keys[3], E);
         forged[20] ^= 0x01;
-        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, forged) == VoteResult::RejectedBadSignature,
-                    "forged vote triggering the quorum check ⇒ RejectedBadSignature");
+        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, forged) == VoteResult::Recorded,
+                    "the forged vote is RECORDED — a candidate is not a verified vote");
+        s5 &= check(!engine.is_final(E.block_id), "a forged-padded quorum does NOT finalize");
         s5 &= check(engine.distinct_voters(E.block_id) == 3, "forged vote evicted — 3 genuine remain");
         s5 &= check(engine.voted_stake(E.block_id) == 60, "stake refunded to 60 after eviction");
-        s5 &= check(!engine.is_final(E.block_id), "a forged-padded quorum does NOT finalize");
 
         // k3's GENUINE sig now lands → real 4-of-5 / 80 stake → finalizes.
-        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, sign_vote(keys[3], E)) == VoteResult::Accepted,
+        s5 &= check(engine.record_vote(E.block_id, keys[3].pk, sign_vote(keys[3], E)) == VoteResult::Recorded,
                     "k3's valid sig accepted after its forged one was evicted");
         s5 &= check(engine.is_final(E.block_id), "genuine quorum finalizes");
         auto c5 = engine.assemble_cert(E.block_id);
