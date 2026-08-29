@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// toy_stub_killer_test.cpp — the acceptance gate for the consensus2 seed.
+// toy_stub_killer_test.cpp — the acceptance gate for the consensus seed.
 //
 // Proves, with REAL BLS12-381 keys and signatures (cevm::crypto::bls, blst-
 // backed), that QuorumCertEngine does what the toy stub (pkg/c) CANNOT:
@@ -17,8 +17,8 @@
 //
 // Exits non-zero on ANY failed assertion.
 
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -26,7 +26,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 
@@ -96,7 +96,7 @@ void verdict(int n, bool ok) {
 }  // namespace
 
 int main() {
-    std::puts("================ consensus2 seed — TOY-STUB-KILLER ================");
+    std::puts("================ consensus seed — TOY-STUB-KILLER ================");
     std::puts("real BLS12-381 (cevm::crypto::bls, blst) | finality GATE only\n");
 
     // ── Common fixture: 5 validators, stake 20 each (total 100), α = 4.

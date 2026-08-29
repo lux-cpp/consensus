@@ -1,11 +1,11 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 
-#include "lux/consensus2/node.hpp"
+#include "lux/consensus/node.hpp"
 
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/bls.hpp"
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 Node::Node(std::uint32_t index,
            const std::array<std::uint8_t, 32> & sk,
@@ -94,4 +94,4 @@ VoteResult Node::onVote(const SignedVote & v) {
     return gate_.record_vote(v.block_id, v.voter, v.sig);
 }
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

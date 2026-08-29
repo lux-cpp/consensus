@@ -5,3 +5,5 @@ proofs/*.aux
 proofs/*.log
 proofs/*.out
 proofs/*.pdf
+.DS_Store
+compile_commands.json

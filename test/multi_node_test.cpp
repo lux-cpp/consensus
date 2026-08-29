@@ -1,14 +1,14 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// multi_node_test.cpp — proves consensus2 is a genuine DISTRIBUTED protocol, not
+// multi_node_test.cpp — proves consensus is a genuine DISTRIBUTED protocol, not
 // a single vote-counter: N independent Node instances, each with its own BLS key,
 // each running the engine over the shared validator set, exchange signed votes
 // through a VoteTransport and INDEPENDENTLY converge on the same quorum
 // certificate. Includes a Byzantine validator and a sub-supermajority case.
 
-#include "lux/consensus2/node.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/node.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 int g_fail = 0;
@@ -57,7 +57,7 @@ VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t roun
 }  // namespace
 
 int main() {
-    std::printf("=============== consensus2 — multi-node distributed finality ===============\n");
+    std::printf("=============== consensus — multi-node distributed finality ===============\n");
     std::printf("5 independent validator nodes exchange signed votes and converge on one cert\n\n");
 
     std::vector<Key> keys;

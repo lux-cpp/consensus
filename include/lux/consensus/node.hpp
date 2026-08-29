@@ -9,12 +9,12 @@
 //
 // The VoteTransport is the seam between consensus and the network: the in-process
 // test harness implements it as a bus; a ZAP gossip layer implements it for a
-// real validator mesh. consensus2 itself never knows which.
+// real validator mesh. consensus itself never knows which.
 
 #pragma once
 
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/wave.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/wave.hpp"
 
 #include <array>
 #include <cstdint>
@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 struct SignedVote {
     BlockId block_id{};
@@ -150,4 +150,4 @@ private:
     std::optional<std::uint64_t> final_through_;
 };
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

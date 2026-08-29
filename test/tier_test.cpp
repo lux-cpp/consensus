@@ -21,8 +21,8 @@
 //      majority must not self-ignite Nova on its own signature.
 //   5. Fail-closed everywhere a floor cannot be asserted.
 
-#include "lux/consensus2/bls.hpp"
-#include "lux/consensus2/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
 
 #include <array>
 #include <cstdint>
@@ -31,7 +31,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 
@@ -77,7 +77,7 @@ std::vector<Key> keyring(std::size_t n) {
 }  // namespace
 
 int main() {
-    std::printf("================== consensus2 — FINALITY TIERS (Nova / Quasar) ==================\n");
+    std::printf("================== consensus — FINALITY TIERS (Nova / Quasar) ==================\n");
 
     const std::vector<Key> keys = keyring(5);
 

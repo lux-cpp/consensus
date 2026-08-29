@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 
-// oracle — emits the conformance corpus consensus2 is checked against.
+// oracle — emits the conformance corpus consensus is checked against.
 //
 // Go is the source of truth. Every value here is READ OUT of the running Go
 // implementation (github.com/luxfi/consensus, github.com/luxfi/crypto), never

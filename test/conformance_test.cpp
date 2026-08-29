@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// conformance_test.cpp — consensus2 against the Go corpus.
+// conformance_test.cpp — consensus against the Go corpus.
 //
 // Go is the source of truth. scripts/oracle reads the values out of the running
 // Go implementation and writes them here; this harness re-derives each one in
@@ -19,10 +19,10 @@
 //   4. THE COMMITTEE     — NovaQuorum, NovaSignerFloor,
 //                          EqualStakeSupermajorityThreshold, AlphaForK (ceil).
 
-#include "lux/consensus2/bls.hpp"
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/threshold.hpp"
-#include "lux/consensus2/wave.hpp"
+#include "lux/consensus/bls.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/threshold.hpp"
+#include "lux/consensus/wave.hpp"
 
 #include "bls_signature.hpp"  // the eth2 POP surface — the domain trap, proven below
 
@@ -38,7 +38,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 
@@ -138,7 +138,7 @@ private:
 };
 
 std::vector<Row> load(const std::string& name) {
-    const std::string path = std::string(CONSENSUS2_VECTORS) + "/" + name;
+    const std::string path = std::string(CONSENSUS_VECTORS) + "/" + name;
     std::ifstream in(path, std::ios::binary);
     if (!in) die("cannot open " + path + " (regenerate: go run ./scripts/oracle -out vectors)");
     std::ostringstream buf;
@@ -245,7 +245,7 @@ void vote_signature() {
 
         // THE TRAP, proven: the reused eth2 surface signs the SAME key over the SAME
         // message under ..._RO_POP_. It produces a different signature, and the two
-        // domains reject each other. This is why consensus2 has its own surface.
+        // domains reject each other. This is why consensus has its own surface.
         std::array<std::uint8_t, 96> pop{};
         check(cevm::crypto::bls::sign(sk.data(), msg.data(), msg.size(), pop.data()) == 0,
               name + ": the eth2 POP surface signs too");
@@ -299,8 +299,8 @@ void committee() {
 }  // namespace
 
 int main() {
-    std::printf("================== consensus2 — GO CONFORMANCE ==================\n");
-    std::printf("corpus: %s\n", CONSENSUS2_VECTORS);
+    std::printf("================== consensus — GO CONFORMANCE ==================\n");
+    std::printf("corpus: %s\n", CONSENSUS_VECTORS);
 
     vote_message();
     vote_signature();

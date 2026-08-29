@@ -16,7 +16,7 @@
 
 #include <cstdint>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 // The 69% per-round agreement threshold (LP-CONSENSUS-69) — Go
 // config.ConsensusSuperMajority. This is the SAMPLING threshold, not the stake
@@ -61,4 +61,4 @@ inline constexpr std::uint32_t kMinBFTCommittee = 4;
 // under its declared threshold.
 [[nodiscard]] int alpha_threshold(std::uint32_t k, double alpha) noexcept;
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

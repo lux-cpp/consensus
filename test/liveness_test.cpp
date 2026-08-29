@@ -26,9 +26,9 @@
 // down; let the gate count unverified votes and [2]'s garbage would finalize a
 // forged quorum. Both are caught here.
 
-#include "lux/consensus2/node.hpp"
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/node.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -38,7 +38,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 
@@ -78,7 +78,7 @@ struct Bus : VoteTransport {
 }  // namespace
 
 int main() {
-    std::printf("===================== consensus2 — LIVENESS (route around faults) =====================\n");
+    std::printf("===================== consensus — LIVENESS (route around faults) =====================\n");
     std::printf("leaderless: any α distinct >2/3-stake voters finalize; a down/wedged node is routed around\n\n");
 
     constexpr std::uint32_t kN = 10, kAlpha = 7;

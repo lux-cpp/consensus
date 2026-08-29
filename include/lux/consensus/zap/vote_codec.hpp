@@ -1,22 +1,22 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// vote_codec.hpp — ZAP wire codec for a consensus2 SignedVote. Encodes/decodes a
+// vote_codec.hpp — ZAP wire codec for a consensus SignedVote. Encodes/decodes a
 // vote as a ZAP frame payload (lux::zap::Writer/Reader), so votes ride the
 // canonical Lux ZAP transport (luxcpp/zap-cpp-core) between validators. This is
-// the adapter layer: core consensus2 has no ZAP dependency; only this header and
+// the adapter layer: core consensus has no ZAP dependency; only this header and
 // the ZapVoteTransport do.
 
 #pragma once
 
-#include "lux/consensus2/node.hpp"  // SignedVote
+#include "lux/consensus/node.hpp"  // SignedVote
 #include "lux/zap/wire.hpp"          // lux::zap::Writer / Reader
 
 #include <cstdint>
 #include <optional>
 #include <vector>
 
-namespace lux::consensus2::zap {
+namespace lux::consensus::zap {
 
 // ZAP MsgType id for a gossiped consensus vote (lower 6 bits, per ZAP spec).
 constexpr std::uint8_t kVoteMsgType = 0x11;
@@ -52,4 +52,4 @@ inline std::optional<SignedVote> decode_vote(const std::vector<std::uint8_t> & p
     return v;
 }
 
-}  // namespace lux::consensus2::zap
+}  // namespace lux::consensus::zap

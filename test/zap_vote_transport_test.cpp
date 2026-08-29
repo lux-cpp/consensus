@@ -1,16 +1,16 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// zap_vote_transport_test.cpp — proves consensus2 votes cross a REAL byte channel
+// zap_vote_transport_test.cpp — proves consensus votes cross a REAL byte channel
 // via the canonical ZAP wire codec, and that validators on opposite ends of a
 // socket independently reach finality from wire-delivered votes. This closes the
 // gap from "in-process bus" to "over the wire": the same VoteTransport seam, now
 // backed by lux::zap framing over an OS socket.
 
-#include "lux/consensus2/node.hpp"
-#include "lux/consensus2/zap/vote_codec.hpp"
-#include "lux/consensus2/zap/zap_vote_transport.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/node.hpp"
+#include "lux/consensus/zap/vote_codec.hpp"
+#include "lux/consensus/zap/zap_vote_transport.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <sys/socket.h>
 
@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 int g_fail = 0;
@@ -50,7 +50,7 @@ VotePosition make_pos(std::uint8_t tag, std::uint64_t height, std::uint32_t roun
 }  // namespace
 
 int main() {
-    std::printf("============ consensus2 — votes over the ZAP wire (real socket) ============\n");
+    std::printf("============ consensus — votes over the ZAP wire (real socket) ============\n");
     std::printf("two validator groups exchange ZAP-framed votes and both finalize\n\n");
 
     // ── [1] ZAP codec round-trips a signed vote ──────────────────────────────
@@ -123,6 +123,6 @@ int main() {
 
     std::printf("---------------------------------------------------------------------------\n");
     if (g_fail) { std::printf("==== ZAP TRANSPORT: FAIL (%d) ====\n", g_fail); return 1; }
-    std::printf("==== ZAP TRANSPORT: 2/2 PASS — consensus2 votes finalize over the ZAP wire ====\n");
+    std::printf("==== ZAP TRANSPORT: 2/2 PASS — consensus votes finalize over the ZAP wire ====\n");
     return 0;
 }

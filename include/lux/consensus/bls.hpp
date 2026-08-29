@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// bls.hpp — the ONE BLS surface consensus2 signs and verifies through.
+// bls.hpp — the ONE BLS surface consensus signs and verifies through.
 //
 // THE DOMAIN IS THE WHOLE POINT. A BLS signature is a hash-to-curve under a
 // domain separation tag; two implementations that agree on every byte of the
@@ -15,7 +15,7 @@
 // to ..._RO_POP_ — correct for its own domain, wrong for a consensus vote. Same
 // key, same message, different signature; proven to reject bidirectionally.
 //
-// So consensus2 has exactly one BLS surface and it knows exactly one domain:
+// So consensus has exactly one BLS surface and it knows exactly one domain:
 // the Lux consensus vote domain. Behind it:
 //
 //   - the DOMAIN-BOUND operations (sign, verify, fast_aggregate_verify) hash to
@@ -39,7 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace lux::consensus2::bls {
+namespace lux::consensus::bls {
 
 // The Lux consensus vote ciphersuite — byte-identical to Go luxfi/crypto
 // bls.dstSignature. Exposed so a conformance test can assert the tag itself.
@@ -60,4 +60,4 @@ int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
                           const std::uint8_t* msg, std::size_t msg_len,
                           const std::uint8_t agg_sig[96]) noexcept;
 
-}  // namespace lux::consensus2::bls
+}  // namespace lux::consensus::bls

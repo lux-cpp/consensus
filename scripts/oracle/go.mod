@@ -1,4 +1,4 @@
-module github.com/luxfi/consensus2/oracle
+module github.com/luxcpp/consensus/oracle
 
 go 1.26.4
 
@@ -150,6 +150,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/luxfi/consensus => ../../../consensus
+replace github.com/luxfi/consensus => ../../../../lux/consensus
 
-replace github.com/luxfi/crypto => ../../../crypto
+replace github.com/luxfi/crypto => ../../../../lux/crypto

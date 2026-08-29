@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
 // quorum_cert_engine.cpp — finality gate implementation. The RULE lives here;
-// the CRYPTO is lux::consensus2::bls (the Lux consensus vote domain over blst).
+// the CRYPTO is lux::consensus::bls (the Lux consensus vote domain over blst).
 
-#include "lux/consensus2/quorum_cert_engine.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
 
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <cstdint>
 #include <stdexcept>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 namespace {
 
@@ -77,21 +77,21 @@ std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos, bool a
 QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators, std::uint32_t alpha)
     : total_stake_(0), alpha_(alpha) {
     if (validators.empty())
-        throw std::invalid_argument("consensus2: empty validator set");
+        throw std::invalid_argument("consensus: empty validator set");
     if (alpha == 0)
-        throw std::invalid_argument("consensus2: alpha (distinct-voter floor) is zero");
+        throw std::invalid_argument("consensus: alpha (distinct-voter floor) is zero");
     if (alpha > validators.size())
-        throw std::invalid_argument("consensus2: alpha exceeds validator count — quorum unreachable");
+        throw std::invalid_argument("consensus: alpha exceeds validator count — quorum unreachable");
 
     for (const auto& v : validators) {
         if (v.stake == 0)
-            throw std::invalid_argument("consensus2: in-set validator has zero stake");
+            throw std::invalid_argument("consensus: in-set validator has zero stake");
         if (!validators_.emplace(v.pubkey, v.stake).second)
-            throw std::invalid_argument("consensus2: duplicate validator pubkey");
+            throw std::invalid_argument("consensus: duplicate validator pubkey");
         // Checked add: a wrapped total_stake_ would corrupt the stake floors and is a
         // safety bug, not a config error. Fail closed at construction instead.
         if (total_stake_ > UINT64_MAX - v.stake)
-            throw std::invalid_argument("consensus2: total stake overflows uint64");
+            throw std::invalid_argument("consensus: total stake overflows uint64");
         total_stake_ += v.stake;
     }
 }
@@ -320,4 +320,4 @@ bool QuorumCertEngine::verify_cert(const QuorumCert& cert) const {
                                       msg.data(), msg.size(), cert.aggregate_sig.data()) == 0;
 }
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

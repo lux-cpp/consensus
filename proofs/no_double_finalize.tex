@@ -1,7 +1,7 @@
 % Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 % SPDX-License-Identifier: BSD-3-Clause-Eco
 %
-% Safety + liveness of the consensus2 leaderless BLS quorum-certificate finality
+% Safety + liveness of the consensus leaderless BLS quorum-certificate finality
 % gate, and the honest non-equivocation discipline the Node enforces. The slot is a
 % HEIGHT (not (height,epoch)): the epoch is a proposer-chosen axis and must not
 % fragment the equivocation slot. Non-equivocation is made durable across a height's
@@ -16,9 +16,9 @@
 \newtheorem{definition}{Definition}
 \newtheorem{corollary}{Corollary}
 
-\title{Agreement and Liveness of the \texttt{consensus2} Leaderless\\
+\title{Agreement and Liveness of the \texttt{consensus} Leaderless\\
        BLS Quorum-Certificate Finality Gate}
-\author{Lux Industries --- consensus2 / node2}
+\author{Lux Industries --- consensus / node2}
 \date{}
 
 \begin{document}
@@ -120,7 +120,7 @@ pruned slot set (\texttt{engine/chain/vote\_guard.go}, \texttt{finalizedThrough}
 re-seeds \texttt{reserveSlotForSign}'s floor from it on boot, folding in the
 \texttt{vm.LastAccepted} hint height as a complementary lower bound --- a SIGN-GATE-ONLY
 value that never enters \texttt{byHeight} or the authoritative finality ledger (PART-A
-preserved). The \texttt{consensus2} \texttt{Node} keeps \texttt{final\_through\_} in memory
+preserved). The \texttt{consensus} \texttt{Node} keeps \texttt{final\_through\_} in memory
 only; it is a pure library with no persistence layer, so its embedder (\texttt{node2}) MUST
 re-seed the frontier via \texttt{mark\_finalized\_through} from its own persisted decided
 height on boot before the node signs. With that boot-seed, Definition~\ref{def:nonequiv}
@@ -331,7 +331,7 @@ gossip; \texttt{vote\_guard.go}: v3 lock-round persistence), \emph{opt-in} per n
 \S\ref{sec:roundscoped} preamble is unchanged when off), and is proven there by an
 adversarial suite (an $f{=}1$ equivocator that double-prevotes and double-precommits every
 sibling at every round; $0/200$ non-uniform-visibility liveness; a storm under the race
-detector; the $\alpha{=}3$ tightness fork). \texttt{consensus2} currently implements the
+detector; the $\alpha{=}3$ tightness fork). \texttt{consensus} currently implements the
 \emph{height-only} \texttt{committed\_slot\_} of \S\ref{sec:model} (\texttt{src/node.cpp}):
 Theorem~\ref{thm:agree} holds, but it is subject to the competing-sibling liveness
 deadlock above. Porting \texttt{round\_view.go} to a \texttt{round\_view.hpp/cpp} on top of
