@@ -1,0 +1,128 @@
+[
+  {
+    "alpha_for_k": 0,
+    "equal_stake_supermajority": 1,
+    "n": 0,
+    "nova_quorum": 1,
+    "nova_signer_floor": 1
+  },
+  {
+    "alpha_for_k": 1,
+    "equal_stake_supermajority": 1,
+    "n": 1,
+    "nova_quorum": 1,
+    "nova_signer_floor": 1
+  },
+  {
+    "alpha_for_k": 2,
+    "equal_stake_supermajority": 2,
+    "n": 2,
+    "nova_quorum": 2,
+    "nova_signer_floor": 2
+  },
+  {
+    "alpha_for_k": 3,
+    "equal_stake_supermajority": 3,
+    "n": 3,
+    "nova_quorum": 2,
+    "nova_signer_floor": 2
+  },
+  {
+    "alpha_for_k": 3,
+    "equal_stake_supermajority": 3,
+    "n": 4,
+    "nova_quorum": 3,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 4,
+    "equal_stake_supermajority": 4,
+    "n": 5,
+    "nova_quorum": 3,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 5,
+    "equal_stake_supermajority": 5,
+    "n": 6,
+    "nova_quorum": 4,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 5,
+    "equal_stake_supermajority": 5,
+    "n": 7,
+    "nova_quorum": 4,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 6,
+    "equal_stake_supermajority": 6,
+    "n": 8,
+    "nova_quorum": 5,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 7,
+    "equal_stake_supermajority": 7,
+    "n": 9,
+    "nova_quorum": 5,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 7,
+    "equal_stake_supermajority": 7,
+    "n": 10,
+    "nova_quorum": 6,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 8,
+    "equal_stake_supermajority": 8,
+    "n": 11,
+    "nova_quorum": 6,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 9,
+    "equal_stake_supermajority": 9,
+    "n": 12,
+    "nova_quorum": 7,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 14,
+    "equal_stake_supermajority": 14,
+    "n": 20,
+    "nova_quorum": 11,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 15,
+    "equal_stake_supermajority": 15,
+    "n": 21,
+    "nova_quorum": 11,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 16,
+    "equal_stake_supermajority": 15,
+    "n": 22,
+    "nova_quorum": 12,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 69,
+    "equal_stake_supermajority": 67,
+    "n": 100,
+    "nova_quorum": 51,
+    "nova_signer_floor": 3
+  },
+  {
+    "alpha_for_k": 690,
+    "equal_stake_supermajority": 667,
+    "n": 1000,
+    "nova_quorum": 501,
+    "nova_signer_floor": 3
+  }
+]

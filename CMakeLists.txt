@@ -77,7 +77,9 @@ set(CONSENSUS2_TESTS
   batch_verify_attack
   no_double_finalize   # agreement: no two conflicting blocks finalize at a height
   liveness
-  out_of_turn)         # the acceptance window
+  out_of_turn          # the acceptance window
+  tier                 # the two finality rungs: Nova (accept) and Quasar (export)
+  conformance)         # the Go corpus: message bytes, DST, floors, thresholds
 
 # The ZAP vote transport rides zap-cpp-core, so it is gated on -DZAP_DIR; core
 # consensus2 has no ZAP dependency.
@@ -95,6 +97,13 @@ endforeach()
 if (ZAP_DIR)
   target_include_directories(zap_vote_transport_test PRIVATE "${ZAP_DIR}")
 endif()
+
+# The conformance harness reads the Go-generated corpus. CONFORMANCE_DIR points at
+# whichever checkout holds it; the vectors shipped here are the default.
+set(CONFORMANCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vectors" CACHE PATH
+    "Directory holding the Go-generated conformance corpus")
+target_compile_definitions(conformance_test PRIVATE
+    CONSENSUS2_VECTORS="${CONFORMANCE_DIR}")
 
 # Apply the requested sanitizer to consensus2's OWN targets only (blst/bls stay
 # clean — see CONSENSUS2_SANITIZE above). One place; every consensus2 target gets

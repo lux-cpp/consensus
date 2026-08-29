@@ -135,6 +135,40 @@ line there: source `test/<name>_test.cpp`, target `<name>_test`, ctest name
 `<name>`. The sanitizer block reads the same list, so a test can never be
 instrumented in one place and forgotten in another.
 
+## The Go corpus
+
+`scripts/oracle` READS the values out of the running Go implementation and writes
+them to `vectors/`; `test/conformance_test.cpp` re-derives each one in C++ and
+demands byte equality. Nothing in the harness states what the answer ought to be —
+the corpus does, and the corpus is regenerable:
+
+```
+cd scripts/oracle && GOWORK=off go run . -out ../../vectors
+```
+
+Four files, four things pinned — exactly the four that had silently drifted:
+
+| file | pins | from |
+|---|---|---|
+| `vote_message.json` | the 226-byte signed message, every axis, both decisions, the canonical degrade | `chain.CanonicalVoteMessage` |
+| `vote_signature.json` | the domain tag, by pinning its output for real keys | `bls.Sign` |
+| `stake_floor.json` | the ⅔ and ½ floors to `MaxUint64` | `config.TwoThirdsStakeFloor` / `HalfStakeFloor` |
+| `committee.json` | `NovaQuorum`, `NovaSignerFloor`, `EqualStakeSupermajorityThreshold`, `AlphaForK` | `engine/chain`, `config` |
+
+The signature rows also prove the trap directly: they sign the same key over the
+same message through the reused eth2 POP surface and assert the result differs and
+that the consensus domain rejects it.
+
+Each file is a JSON **array of FLAT objects** whose values are strings, numbers or
+booleans. That is the whole schema, deliberately the smallest thing a reader in
+any language consumes without a dependency — the harness carries its own ~70-line
+reader and rejects anything nested rather than skipping past it. Values are kept
+as literal text so a `uint64` near `MaxUint64` never passes through a double.
+
+`-DCONFORMANCE_DIR=` points the harness at another checkout's corpus; the vectors
+here are the default. `luxfi/conformance` is the corpus's eventual home — promoting
+these files there is a cross-repo change and has not been made.
+
 ## What is NOT here
 
 Honest scope. The gate, the wave, the sampler and a vote mesh — not the whole
