@@ -8,8 +8,8 @@
 // reproduce). The safety invariant under test: is_final ⟹ every counted voter
 // validly signed (block,height,epoch). The attacker holds in-set, POP'd keys.
 
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 int g_fail = 0;

@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// engine_integration_test.cpp — proves the two consensus2 layers compose into
+// engine_integration_test.cpp — proves the two consensus layers compose into
 // one engine: the LIVENESS layer (photon sampling + wave FPC confidence) decides
 // WHICH block the network converges on; the SAFETY layer (QuorumCertEngine, real
 // BLS + >2/3-stake quorum cert) PROVES it. The contract:
@@ -13,10 +13,10 @@
 // This is the cert-carrying finalization path a node drives: poll until decided,
 // then collect the signed votes into a verifiable certificate.
 
-#include "lux/consensus2/photon.hpp"
-#include "lux/consensus2/wave.hpp"
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/photon.hpp"
+#include "lux/consensus/wave.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdio>
@@ -24,7 +24,7 @@
 #include <cstdlib>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 int g_fail = 0;
@@ -54,7 +54,7 @@ Signature sign_vote(const Key& key, const VotePosition& pos) {
 }  // namespace
 
 int main() {
-    std::printf("========== consensus2 — engine integration (liveness ⇒ safety) ==========\n");
+    std::printf("========== consensus — engine integration (liveness ⇒ safety) ==========\n");
     std::printf("wave decides the block; the BLS quorum-cert gate proves it\n\n");
 
     // Validator set: 5 validators, stake 20 each (total 100), α = 4.

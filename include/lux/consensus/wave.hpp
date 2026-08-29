@@ -19,13 +19,13 @@
 
 #pragma once
 
-#include "lux/consensus2/threshold.hpp"
+#include "lux/consensus/threshold.hpp"
 
 #include <array>
 #include <cstdint>
 #include <map>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 enum class Decision : std::uint8_t { Undecided = 0, Accept = 1, Reject = 2 };
 
@@ -88,4 +88,4 @@ private:
     std::map<Item, State> states_;  // std::map: total order on the 32-byte id, no hash needed
 };
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

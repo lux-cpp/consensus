@@ -1,8 +1,9 @@
-# consensus2 — the finality GATE (pure C++23)
+# consensus — the finality GATE (pure C++23)
 
-`luxfi/consensus2`: a real, leaderless **finality gate** — genuine BLS12-381
+`luxcpp/consensus`: a real, leaderless **finality gate** — genuine BLS12-381
 verification, per-validator dedup, and stake-weighted tier floors, fail-closed.
-Embedded by `luxfi/node2`.
+Embedded by `luxfi/node2`. Also carries the **Quasar witness** surface — the C++
+hot-path port of Go `protocol/quasar` with the `lux_quasar_*` cgo ABI.
 
 **Go is the source of truth.** `luxfi/consensus` (`engine/chain`, `config`,
 `protocol/wave`) runs on mainnet; this implementation CONFORMS to it. Where the
@@ -32,7 +33,7 @@ relabelled Quasar dies on the ⅔ clause. Mirrors Go `QuorumCert.VerifyWeighted`
   wave sizes its per-round threshold from the same ⅔ rule; a second definition on
   either side is how a count gate drifts from the stake predicate it tracks. Go
   keeps them in `config` for exactly that reason.
-- **Crypto** — `lux::consensus2::bls`. blst-backed, and it knows exactly ONE
+- **Crypto** — `lux::consensus::bls`. blst-backed, and it knows exactly ONE
   domain: the Lux consensus vote domain.
 - **Message** — `canonical_vote_message()`. Deterministic, fixed-width, 226 bytes,
   byte-identical to Go `chain.CanonicalVoteMessage`.
@@ -50,7 +51,7 @@ BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_       (luxfi/crypto bls.dstSignature
 The reused `cevm::crypto::bls` is the **eth2 precompile** ciphersuite and is
 hard-wired to `..._RO_POP_` — correct for its domain, wrong for a consensus vote.
 Same key, same message, different signature, and the two reject each other. So
-`lux::consensus2::bls` is the one surface consensus2 signs through: the
+`lux::consensus::bls` is the one surface consensus signs through: the
 domain-BOUND operations (`sign`, `verify`, `fast_aggregate_verify`) hash under
 `kVoteDST` against blst; the domain-FREE ones (`keygen`, `sk_to_pk`,
 `aggregate_sigs` — point arithmetic, no hash-to-curve) forward to the reused
@@ -100,23 +101,58 @@ vote its own gate would evict AND burn the wrong equivocation slot.
 ## Layout
 
 ```
-include/lux/consensus2/threshold.hpp   the quorum floors — one home, two consumers
-include/lux/consensus2/bls.hpp         the Lux consensus vote domain over blst
-include/lux/consensus2/quorum_cert_engine.hpp   the gate: rule, position, cert
-include/lux/consensus2/wave.hpp        FPC threshold voting + β confidence
-include/lux/consensus2/photon.hpp      committee sampling (header-only)
-include/lux/consensus2/node.hpp        one validator: poll, sign, disseminate
-include/lux/consensus2/zap/            votes over the ZAP wire codec
+include/lux/consensus/threshold.hpp   the quorum floors — one home, two consumers
+include/lux/consensus/bls.hpp         the Lux consensus vote domain over blst
+include/lux/consensus/quorum_cert_engine.hpp   the gate: rule, position, cert
+include/lux/consensus/wave.hpp        FPC threshold voting + β confidence
+include/lux/consensus/photon.hpp      committee sampling (header-only)
+include/lux/consensus/node.hpp        one validator: poll, sign, disseminate
+include/lux/consensus/zap/            votes over the ZAP wire codec
+include/lux/quasar.h                  the witness cgo ABI — a published contract
+include/lux/quasar.hpp                WitnessVerifier / WitnessAggregator
 src/                                   the bodies
-test/                                  one file per name in CONSENSUS2_TESTS
+test/                                  one file per name in CONSENSUS_TESTS
+testdata/                              the Go witness fixtures (5, binary)
 ```
+
+## Quasar witness — the sibling surface
+
+The C++ hot-path port of Go `luxfi/consensus/protocol/quasar`: `Verify` +
+`AggregateThresholdSignatures`, byte-stable with the Go side. It builds
+`luxconsensus_quasar` (`WitnessVerifier` / `WitnessAggregator`, namespace
+`lux::quasar`) plus `luxconsensus_quasar_c`, the extern-`"C"` shim exporting the
+four `lux_quasar_*` symbols and nothing else.
+
+A **sibling** of the gate, not a layer of it — no gate source calls `lux::quasar`.
+Both ride the same from-source blst and the same `..._RO_NUL_` DST, so the tree
+has exactly one blst and one signature domain, but neither library depends on the
+other. The namespace stays `lux::quasar`: it does not collide with
+`lux::consensus`, and renaming it would break the consumer below.
+
+Deliberately **CPU-only** (`Backend::Gpu` is reserved behind the same enum):
+per-round verify is latency-bound, and blst's assembly beats an unbatched CUDA
+round trip. A future GPU backend swaps in behind the same C ABI without
+recompiling any Go consumer.
+
+Aggregation takes Go's threshold wire form — `shares_n` records of
+`(index : u32 big-endian) || (sig : 96 bytes)`, mirroring
+`luxfi/crypto/threshold/bls.SignatureShare`. That is a different shape from the
+gate's `aggregate_sigs`, which takes a flat `96·n` concatenation with no index.
+
+**Consumer:** `lux-private/multichain-cpp` links `luxconsensus_quasar` for real
+CrossRef BLS verification (`lux_quasar_witness_verify`) and **fails closed** if
+the library is unlinked. It locates the library by the name `luxconsensus_quasar`
+and the header by the path `lux/quasar.h`. Neither may be renamed.
+
+> The full Quasar engine (Photon→Wave→Focus; triple-seal BLS12-381 + Pulsar +
+> ML-DSA-65) lives in Go `luxfi/consensus`.
 
 ## Reused vs new
 
 - **Reused, unmodified** (from the `~/work/luxcpp` checkout, NOT vendored):
   `blst/` (built from source: `server.c` + `assembly.S`) and
   `crypto/bls/cpp/bls_signature.{hpp,cpp}` for the domain-free operations.
-- **New:** everything under `include/lux/consensus2` and `src/`.
+- **New:** everything under `include/lux/consensus` and `src/`.
 
 ## Build + test
 
@@ -127,15 +163,15 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 ```
 
-Sanitizers cover consensus2's own code only (the reused assembly crypto stays
-uninstrumented): `-DCONSENSUS2_SANITIZE=address,undefined` or `=thread`.
+Sanitizers cover consensus's own code only (the reused assembly crypto stays
+uninstrumented): `-DCONSENSUS_SANITIZE=address,undefined` or `=thread`.
 
 TSan aborts with `FATAL: ThreadSanitizer: unexpected memory mapping` on kernels
 that hand out 32 bits of mmap randomness — its shadow mapping does not fit. That
 is the loader, not the code. Run the suite with randomization off:
 `setarch -R ctest --test-dir build`. ASan needs no such thing.
 
-Tests live in ONE list in `CMakeLists.txt` (`CONSENSUS2_TESTS`). A new test is one
+Tests live in ONE list in `CMakeLists.txt` (`CONSENSUS_TESTS`). A new test is one
 line there: source `test/<name>_test.cpp`, target `<name>_test`, ctest name
 `<name>`. The sanitizer block reads the same list, so a test can never be
 instrumented in one place and forgotten in another.
@@ -174,6 +210,23 @@ as literal text so a `uint64` near `MaxUint64` never passes through a double.
 here are the default. `luxfi/conformance` is the corpus's eventual home — promoting
 these files there is a cross-repo change and has not been made.
 
+`testdata/` is the second corpus, on the same discipline: five binary witness
+fixtures the quasar tests read with no argument, regenerable from the same Go
+source of truth. Bytes differ run to run only because the generator mints fresh
+random keys; the sizes and the structure do not.
+
+```
+cd ~/work/lux/consensus && QUASAR_DUMP=<repo>/testdata \
+  GOWORK=off go test -count=1 -run TestDumpWitnessFixtures ./protocol/quasar
+```
+
+Both regenerators reach the Go repos by RELATIVE path, so they are tied to where
+this checkout sits. `scripts/oracle/go.mod` resolves `luxfi/consensus` and
+`luxfi/crypto` as `../../../../lux/<repo>` — correct when this repo is at
+`~/work/luxcpp/consensus`, beside the other `luxcpp` trees. Note the sibling trap:
+`~/work/luxcpp/crypto` is the **C++** crypto, so a path that is merely short
+resolves to the wrong repo rather than to nothing.
+
 ## What is NOT here
 
 Honest scope. The gate, the wave, the sampler and a vote mesh — not the whole
@@ -190,3 +243,6 @@ engine. Missing, and known missing:
   two cert shapes do not yet interchange.
 - **The mesh transport.** Votes ride `zap-cpp-core` (the plugin-IPC codec), not
   the PQ-handshake AEAD session protocol the Go validator mesh speaks.
+- **A C ABI for the gate.** Only the quasar witness surface exports one
+  (`lux_quasar_*`). The gate is C++-only and is consumed by `add_subdirectory`;
+  a cgo caller cannot reach `QuorumCertEngine` today.

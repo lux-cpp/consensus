@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// quorum_cert_engine.hpp — the finality GATE of consensus2, in pure C++.
+// quorum_cert_engine.hpp — the finality GATE of consensus, in pure C++.
 //
 // THE FINALITY RULE (one rule, one place), ported from the Go reference
 // engine/chain/cert.go:
@@ -23,7 +23,7 @@
 //   1. THE RULE   — "tier floor of distinct voters AND tier stake floor,
 //                    fail-closed" lives in QuorumCertEngine::meets_quorum /
 //                    verify_cert. Pure logic.
-//   2. THE CRYPTO — per-validator BLS12-381 verify is lux::consensus2::bls,
+//   2. THE CRYPTO — per-validator BLS12-381 verify is lux::consensus::bls,
 //                    the Lux consensus vote domain over blst (bls.hpp). The
 //                    engine never invents a signature scheme; it CALLS one.
 //   3. THE MESSAGE— canonical_vote_message() is a deterministic, domain-
@@ -45,7 +45,7 @@
 
 #pragma once
 
-#include "lux/consensus2/threshold.hpp"  // the tier floors — one definition, shared with wave
+#include "lux/consensus/threshold.hpp"  // the tier floors — one definition, shared with wave
 
 #include <array>
 #include <cstdint>
@@ -54,7 +54,7 @@
 #include <optional>
 #include <vector>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 // ── Wire constants, bound into every signed message (non-malleable role/version)
 inline constexpr std::uint16_t kQuorumCertVersion = 3;  // Go chain.QuorumCertVersion
@@ -301,4 +301,4 @@ private:
     mutable std::mutex mu_;
 };
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

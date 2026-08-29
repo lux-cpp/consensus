@@ -4,11 +4,11 @@
 // wave.cpp — FPC threshold voting + confidence accumulation. Faithful port of
 // luxfi/consensus protocol/wave.Tick (with protocol/focus's β counter).
 
-#include "lux/consensus2/wave.hpp"
+#include "lux/consensus/wave.hpp"
 
 #include <stdexcept>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 WaveConfig WaveConfig::feasible(std::uint32_t n) noexcept {
     WaveConfig cfg;
@@ -87,4 +87,4 @@ std::uint32_t Wave::confidence(const Item & item) const {
     return it == states_.end() ? 0 : it->second.count;
 }
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

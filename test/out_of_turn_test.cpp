@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
 // out_of_turn_test.cpp — the ACCEPTANCE-WINDOW discipline of the finality gate,
-// the consensus2 realization of the proposer-fallback acceptance standard's
-// before/after-window rule. consensus2 is LEADERLESS, so there is no proposer
+// the consensus realization of the proposer-fallback acceptance standard's
+// before/after-window rule. consensus is LEADERLESS, so there is no proposer
 // "turn" to jump; the eligibility window degenerates to two enforced invariants,
 // both proved here against the gate's documented requirement that EVERY off-window
 // input fails:
@@ -25,8 +25,8 @@
 // mesh; when it lands it adds an eligibility predicate ON TOP of these invariants,
 // it does not change them. See the report's decomplection note.)
 
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -35,7 +35,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 
@@ -71,7 +71,7 @@ Signature sign_vote(const Key& key, const VotePosition& pos) {
 }  // namespace
 
 int main() {
-    std::printf("================== consensus2 — ACCEPTANCE WINDOW (no early/out-of-turn) ==================\n");
+    std::printf("================== consensus — ACCEPTANCE WINDOW (no early/out-of-turn) ==================\n");
     std::printf("only an opened position collects votes; every position fully bound; off-window inputs FAIL\n\n");
 
     // 5 validators, stake 20 (total 100, floor 66, α=4).

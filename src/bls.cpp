@@ -4,13 +4,13 @@
 // bls.cpp — the Lux consensus vote domain over blst. See bls.hpp for why the
 // domain, and only the domain, differs from the reused eth2 precompile surface.
 
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include "bls_signature.hpp"  // cevm::crypto::bls — reused, domain-free bodies
 
 #include <blst.h>
 
-namespace lux::consensus2::bls {
+namespace lux::consensus::bls {
 
 namespace {
 
@@ -87,4 +87,4 @@ int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
     return verify(agg_pk, msg, msg_len, agg_sig);
 }
 
-}  // namespace lux::consensus2::bls
+}  // namespace lux::consensus::bls

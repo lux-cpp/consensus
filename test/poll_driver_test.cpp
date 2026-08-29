@@ -7,13 +7,13 @@
 // stub (which would "decide" after β yes-rounds regardless of intervening
 // disagreement) cannot pass scenario [2].
 
-#include "lux/consensus2/photon.hpp"
-#include "lux/consensus2/wave.hpp"
+#include "lux/consensus/photon.hpp"
+#include "lux/consensus/wave.hpp"
 
 #include <cstdio>
 #include <set>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 int g_fail = 0;
@@ -23,7 +23,7 @@ void check(bool ok, const char* what) {
 }  // namespace
 
 int main() {
-    std::printf("============== consensus2 — photon + wave (liveness layer) ==============\n");
+    std::printf("============== consensus — photon + wave (liveness layer) ==============\n");
     std::printf("Lux family sampling + FPC confidence | no \"snow\" | reset-on-inconclusive\n\n");
 
     // K=5, alpha=0.8 → threshold = int(4.0) = 4 of 5; beta = 4 consecutive rounds.

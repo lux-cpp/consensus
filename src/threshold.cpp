@@ -4,11 +4,11 @@
 // threshold.cpp — the quorum thresholds. Pure arithmetic; see threshold.hpp for
 // which Go definition each one mirrors.
 
-#include "lux/consensus2/threshold.hpp"
+#include "lux/consensus/threshold.hpp"
 
 #include <cmath>
 
-namespace lux::consensus2 {
+namespace lux::consensus {
 
 std::uint64_t two_thirds_stake_floor(std::uint64_t total) noexcept {
     const std::uint64_t q = total / 3;
@@ -37,4 +37,4 @@ int alpha_threshold(std::uint32_t k, double alpha) noexcept {
     return static_cast<int>(std::ceil(static_cast<double>(k) * alpha));
 }
 
-}  // namespace lux::consensus2
+}  // namespace lux::consensus

@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace lux::consensus2::photon {
+namespace lux::consensus::photon {
 
 // splitmix64 — a tiny, deterministic, well-distributed generator. The seed is
 // supplied by the caller (upstream round/VRF entropy); this never reads a global
@@ -61,4 +61,4 @@ inline std::vector<std::uint32_t> sample(std::uint32_t n, std::uint32_t k, std::
     return pool;
 }
 
-}  // namespace lux::consensus2::photon
+}  // namespace lux::consensus::photon

@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// zap_vote_transport.hpp — a VoteTransport that disseminates consensus2 votes as
+// zap_vote_transport.hpp — a VoteTransport that disseminates consensus votes as
 // ZAP frames over a real byte channel (a socket fd), using the canonical ZAP
 // codec (luxcpp/zap-cpp-core). This is the concrete realization of the seam
 // Node depends on: in production it carries votes across the validator mesh; the
@@ -13,14 +13,14 @@
 
 #pragma once
 
-#include "lux/consensus2/node.hpp"
-#include "lux/consensus2/zap/vote_codec.hpp"
+#include "lux/consensus/node.hpp"
+#include "lux/consensus/zap/vote_codec.hpp"
 #include "lux/zap/wire.hpp"  // read_frame / write_frame_locked
 
 #include <mutex>
 #include <vector>
 
-namespace lux::consensus2::zap {
+namespace lux::consensus::zap {
 
 class ZapVoteTransport : public VoteTransport {
 public:
@@ -62,4 +62,4 @@ private:
     std::vector<Node *> local_;
 };
 
-}  // namespace lux::consensus2::zap
+}  // namespace lux::consensus::zap

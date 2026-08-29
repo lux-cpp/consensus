@@ -1,7 +1,7 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// no_double_finalize_test.cpp — the BFT SAFETY proof consensus2 was missing:
+// no_double_finalize_test.cpp — the BFT SAFETY proof consensus was missing:
 // under fewer than n/3 Byzantine stake, no two CONFLICTING blocks can finalize at
 // one height. This is the agreement half of "BFT ≥ avalanche". It is proved at
 // three altitudes, each with REAL BLS12-381 keys and signatures (a real violation
@@ -45,9 +45,9 @@
 //     here) flips the f=3 case to a double-finalize. The stake floor's independence
 //     from the count gate is separately mutation-proven in toy_stub_killer [4].
 
-#include "lux/consensus2/node.hpp"
-#include "lux/consensus2/quorum_cert_engine.hpp"
-#include "lux/consensus2/bls.hpp"
+#include "lux/consensus/node.hpp"
+#include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/bls.hpp"
 
 #include <array>
 #include <cstdint>
@@ -57,7 +57,7 @@
 #include <string>
 #include <vector>
 
-using namespace lux::consensus2;
+using namespace lux::consensus;
 
 namespace {
 
@@ -103,7 +103,7 @@ struct Bus : VoteTransport {
 }  // namespace
 
 int main() {
-    std::printf("=================== consensus2 — NO DOUBLE FINALIZE (BFT safety) ===================\n");
+    std::printf("=================== consensus — NO DOUBLE FINALIZE (BFT safety) ===================\n");
     std::printf("under f < n/3, two conflicting blocks never both finalize at one height (real BLS)\n\n");
 
     // 10 validators, stake 10 each → total 100, floor(2/3·100)=66, α=7.
