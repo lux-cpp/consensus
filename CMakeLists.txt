@@ -47,11 +47,30 @@ foreach(_p "${BLST_DIR}/bindings/blst.h" "${BLS_DIR}/bls_signature.cpp")
   endif()
 endforeach()
 
+# blst ISA selection. blst/build.sh adds -D__ADX__ when the host reports adx;
+# without it assembly.S compiles the mulq path and every field multiplication —
+# so every pairing — runs on the slower generic code. Measured on evo: 24% on a
+# verification. BLST_ISA=portable keeps both paths and dispatches at runtime.
+set(BLST_ISA "auto" CACHE STRING "blst ISA: auto | adx | portable | generic")
+set(BLST_ISA_FLAGS "")
+if(BLST_ISA STREQUAL "portable")
+  set(BLST_ISA_FLAGS -D__BLST_PORTABLE__)
+elseif(BLST_ISA STREQUAL "adx")
+  set(BLST_ISA_FLAGS -D__ADX__)
+elseif(BLST_ISA STREQUAL "auto")
+  if(EXISTS /proc/cpuinfo)
+    file(READ /proc/cpuinfo _cpuinfo)
+    if(_cpuinfo MATCHES "[ \t]adx[ \t\n]")
+      set(BLST_ISA_FLAGS -D__ADX__)
+    endif()
+  endif()
+endif()
+
 # ── blst (BLS12-381 backend) — unity build mirroring blst/build.sh ────────────
 add_library(blst STATIC
   "${BLST_DIR}/src/server.c"
   "${BLST_DIR}/build/assembly.S")
-target_compile_options(blst PRIVATE -O2 -fno-builtin)
+target_compile_options(blst PRIVATE -O2 -fno-builtin ${BLST_ISA_FLAGS})
 target_include_directories(blst PUBLIC "${BLST_DIR}/bindings")
 
 # ── cevm::crypto::bls — the REUSED genuine BLS sign/verify/aggregate surface ───
@@ -164,4 +183,15 @@ if (CONSENSUS_SANITIZE)
         target_compile_options(${_t} PRIVATE ${_san})
         target_link_options(${_t} PRIVATE ${_san})
     endforeach()
+endif()
+
+# ── bench_trilang — the C++ leg of the three-language CPU comparison ──────────
+# Off by default: it needs google-benchmark, and a build that cannot find it
+# should still produce the library and the tests. -DCONSENSUS_BENCH=ON to build.
+option(CONSENSUS_BENCH "Build the three-language comparison benchmark" OFF)
+if(CONSENSUS_BENCH)
+  find_package(benchmark REQUIRED)
+  add_executable(bench_trilang bench/bench_trilang.cpp)
+  target_link_libraries(bench_trilang PRIVATE consensus benchmark::benchmark)
+  target_compile_options(bench_trilang PRIVATE -O3 -Wall -Wextra)
 endif()
