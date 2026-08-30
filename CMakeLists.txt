@@ -61,8 +61,14 @@ target_link_libraries(bls_signature PUBLIC blst)
 
 # ── consensus — the NEW finality gate (the seed) ─────────────────────────────
 add_library(consensus STATIC
-  src/threshold.cpp src/bls.cpp src/quorum_cert_engine.cpp src/wave.cpp src/node.cpp)
+  src/threshold.cpp src/fpc.cpp src/bls.cpp src/quorum_cert_engine.cpp src/wave.cpp src/node.cpp)
 target_include_directories(consensus PUBLIC include)
+# IEEE-strict, and not as a style preference. FPC's theta is a double and alpha
+# is its ceiling, so the last bit of theta decides whether a round accepts on 15
+# votes or 16. GCC contracts `min + n*(max-min)` into an FMA by default, which
+# would make this library MORE accurate than the Go it must reproduce -- and a
+# more accurate wrong answer is still a fork. Off, everywhere in the gate.
+target_compile_options(consensus PUBLIC -ffp-contract=off)
 # bls_signature carries the reused domain-free bodies; blst carries the curve. The
 # consensus vote domain (src/bls.cpp) needs blst's headers directly — see bls.hpp.
 target_link_libraries(consensus PUBLIC bls_signature blst)
@@ -116,7 +122,8 @@ set(CONSENSUS_TESTS
   liveness
   out_of_turn          # the acceptance window
   tier                 # the two finality rungs: Nova (accept) and Quasar (export)
-  conformance          # the Go corpus: message bytes, DST, floors, thresholds
+  conformance          # this repo's corpus: message bytes, DST, floors, thresholds
+  fpc_conformance      # the SHARED luxfi/conformance corpus: the epoch seed and theta
   quasar_verify        # the witness verifier vs the Go fixtures, C++ AND C ABI
   quasar_witness)      # threshold-share aggregation on Go's (index || sig) wire form
 
@@ -150,6 +157,23 @@ set(CONFORMANCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vectors" CACHE PATH
     "Directory holding the Go-generated conformance corpus")
 target_compile_definitions(conformance_test PRIVATE
     CONSENSUS_VECTORS="${CONFORMANCE_DIR}")
+
+# fpc_conformance reads a DIFFERENT corpus: luxfi/conformance, the one the Go
+# node, the Rust crates and this tree all answer to. It is not vendored here --
+# a second copy of a corpus is a second truth, and the whole point of that one is
+# that there is exactly one. The default is the sibling checkout; $LUX_VECTORS
+# overrides it at run time, which is the same variable the Rust harness reads, so
+# one environment points every language at one corpus.
+get_filename_component(_default_corpus "${CMAKE_CURRENT_SOURCE_DIR}/../conformance/vectors" ABSOLUTE)
+set(LUX_CORPUS_DIR "${_default_corpus}" CACHE PATH
+    "Directory holding the shared luxfi/conformance corpus")
+target_compile_definitions(fpc_conformance_test PRIVATE LUX_CORPUS="${LUX_CORPUS_DIR}")
+if(NOT EXISTS "${LUX_CORPUS_DIR}/fpc_epoch_seed.json")
+  message(WARNING
+    "the shared conformance corpus is not at ${LUX_CORPUS_DIR}, so the fpc_conformance "
+    "test will fail rather than skip. Check out luxfi/conformance beside this repo, or "
+    "configure with -DLUX_CORPUS_DIR=/path/to/conformance/vectors.")
+endif()
 
 # Apply the requested sanitizer to consensus's OWN targets only (blst/bls stay
 # clean — see CONSENSUS_SANITIZE above). One place; every consensus target gets

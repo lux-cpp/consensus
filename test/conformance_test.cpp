@@ -26,9 +26,10 @@
 
 #include "bls_signature.hpp"  // the eth2 POP surface — the domain trap, proven below
 
+#include "json.hpp"
+
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -56,86 +57,16 @@ void check(bool ok, const std::string& what) {
 }
 
 // ── the corpus reader ────────────────────────────────────────────────────────
-// The corpus schema is an ARRAY of FLAT objects whose values are strings,
-// numbers or booleans. That is all of it, so this is all the reader: values are
-// kept as their literal text (a uint64 near MaxUint64 must not go through a
-// double), and anything nested is a corpus that does not match its schema —
-// which is an error, not something to skip past.
+// The parser is json.hpp, shared with fpc_conformance_test: two readers would
+// be two opinions about what the same bytes say.
+//
+// The SCHEMA is this file's, and it stays strict. This corpus is an ARRAY of
+// FLAT objects whose values are strings, numbers or booleans — that is all of
+// it, and anything nested is a corpus that does not match its schema, which is
+// an error rather than something to skip past. Values are kept as their literal
+// text: a uint64 near MaxUint64 must not go through a double, and the stake
+// floors sit there deliberately.
 using Row = std::map<std::string, std::string>;
-
-class Reader {
-public:
-    explicit Reader(std::string s) : s_(std::move(s)) {}
-
-    std::vector<Row> array() {
-        std::vector<Row> rows;
-        expect('[');
-        skip();
-        if (peek() == ']') { get(); return rows; }
-        for (;;) {
-            rows.push_back(object());
-            skip();
-            const char c = get();
-            if (c == ']') break;
-            if (c != ',') die("expected ',' or ']' in array");
-        }
-        return rows;
-    }
-
-private:
-    std::string s_;
-    std::size_t i_ = 0;
-
-    void skip() { while (i_ < s_.size() && std::isspace(static_cast<unsigned char>(s_[i_]))) ++i_; }
-    char peek() { skip(); if (i_ >= s_.size()) die("unexpected end of corpus"); return s_[i_]; }
-    char get() { const char c = peek(); ++i_; return c; }
-    void expect(char c) { if (get() != c) die(std::string("expected '") + c + "'"); }
-
-    std::string str() {
-        expect('"');
-        std::string out;
-        for (;;) {
-            if (i_ >= s_.size()) die("unterminated string");
-            const char c = s_[i_++];
-            if (c == '"') break;
-            if (c == '\\') die("corpus strings carry no escapes by schema");
-            out.push_back(c);
-        }
-        return out;
-    }
-
-    // A number, `true` or `false` — kept verbatim.
-    std::string scalar() {
-        skip();
-        const std::size_t start = i_;
-        while (i_ < s_.size() && s_[i_] != ',' && s_[i_] != '}' &&
-               !std::isspace(static_cast<unsigned char>(s_[i_])))
-            ++i_;
-        if (i_ == start) die("empty scalar");
-        return s_.substr(start, i_ - start);
-    }
-
-    Row object() {
-        Row row;
-        expect('{');
-        skip();
-        if (peek() == '}') { get(); return row; }
-        for (;;) {
-            const std::string key = str();
-            skip();
-            expect(':');
-            skip();
-            const char c = peek();
-            if (c == '{' || c == '[') die("corpus objects are FLAT by schema: " + key);
-            row[key] = (c == '"') ? str() : scalar();
-            skip();
-            const char n = get();
-            if (n == '}') break;
-            if (n != ',') die("expected ',' or '}' in object");
-        }
-        return row;
-    }
-};
 
 std::vector<Row> load(const std::string& name) {
     const std::string path = std::string(CONSENSUS_VECTORS) + "/" + name;
@@ -143,7 +74,31 @@ std::vector<Row> load(const std::string& name) {
     if (!in) die("cannot open " + path + " (regenerate: go run ./scripts/oracle -out vectors)");
     std::ostringstream buf;
     buf << in.rdbuf();
-    return Reader(buf.str()).array();
+
+    json::Value top;
+    try {
+        top = json::parse(buf.str());
+    } catch (const std::exception& e) {
+        die(std::string("parse ") + name + ": " + e.what());
+    }
+    if (!top.is_array()) die(name + ": the corpus is an array of rows by schema");
+
+    std::vector<Row> rows;
+    rows.reserve(top.size());
+    for (std::size_t i = 0; i < top.size(); ++i) {
+        const json::Value& obj = top[i];
+        if (!obj.is_object()) die(name + ": a corpus row is an object by schema");
+        Row row;
+        const std::vector<std::string>& keys = obj.keys();
+        for (std::size_t k = 0; k < keys.size(); ++k) {
+            const json::Value& v = obj.items()[k];
+            if (v.is_object() || v.is_array())
+                die(name + ": corpus objects are FLAT by schema: " + keys[k]);
+            row[keys[k]] = v.text();
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
 }
 
 const std::string& field(const Row& r, const std::string& key) {

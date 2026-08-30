@@ -102,6 +102,7 @@ vote its own gate would evict AND burn the wrong equivocation slot.
 
 ```
 include/lux/consensus/threshold.hpp   the quorum floors — one home, two consumers
+include/lux/consensus/fpc.hpp         the adaptive threshold: the epoch seed, θ, α
 include/lux/consensus/bls.hpp         the Lux consensus vote domain over blst
 include/lux/consensus/quorum_cert_engine.hpp   the gate: rule, position, cert
 include/lux/consensus/wave.hpp        FPC threshold voting + β confidence
@@ -112,6 +113,7 @@ include/lux/quasar.h                  the witness cgo ABI — a published contra
 include/lux/quasar.hpp                WitnessVerifier / WitnessAggregator
 src/                                   the bodies
 test/                                  one file per name in CONSENSUS_TESTS
+test/json.hpp                          the one corpus reader, shared by both harnesses
 testdata/                              the Go witness fixtures (5, binary)
 ```
 
@@ -210,6 +212,44 @@ as literal text so a `uint64` near `MaxUint64` never passes through a double.
 here are the default. `luxfi/conformance` is the corpus's eventual home — promoting
 these files there is a cross-repo change and has not been made.
 
+### The SHARED corpus — `fpc_conformance_test.cpp`
+
+A second harness reads a different corpus: `luxfi/conformance/vectors`, the one
+the Go node, the Rust crates and this tree all answer to. It is **not** vendored
+here. A second copy of a corpus is a second truth, and the whole point of that one
+is that there is exactly one, so this reads the sibling checkout:
+
+```
+cmake -S . -B build -DLUX_CORPUS_DIR=/path/to/lux/conformance/vectors
+LUX_VECTORS=/path/to/lux/conformance/vectors ./build/fpc_conformance_test
+```
+
+`$LUX_VECTORS` is the same variable `lux-rs/conformance` reads, so one environment
+points every language at one corpus. The default is `../conformance/vectors`; when
+it is absent, configure warns and the test fails rather than skipping — a harness
+that passes when it checked nothing is worse than one that fails.
+
+It pins the FPC plane, which is where α comes from: `fpc_epoch_seed.json` (the
+preimage bytes, the seed, the α that follows, and two pairs of triples the
+encoding must keep apart) and `fpc_theta.json` (the PRF digest, θ as exact
+IEEE-754 bits, and α at five committee sizes across sixteen phases). 174 checks.
+
+The reader is `test/json.hpp`, shared with the flat harness above. That file keeps
+its own strict flat schema — nesting is still an error there — but there is one
+parser, because two would be two opinions about what the same bytes say.
+
+### Floating point is IEEE-strict, and this is why
+
+θ is a double and α is `⌈θ·k⌉`, so the last bit of θ decides whether a round
+accepts on 15 votes or 16. GCC contracts `min + n·(max−min)` into an FMA by
+default, which makes this library **more accurate** than the Go it must
+reproduce — and a more accurate wrong answer is still a fork. Measured, not
+supposed: built `-march=native -ffp-contract=fast`, θ differs from Go in the last
+bit on 2 of 16 phases (phase 6 `…9f2e` vs `…9f2f`, phase 8 `…7c76` vs `…7c75`).
+`-ffp-contract=off` is set on the `consensus` target for that reason, and the
+harness compares θ as bits so a regression is caught by the test rather than by
+the network.
+
 `testdata/` is the second corpus, on the same discipline: five binary witness
 fixtures the quasar tests read with no argument, regenerable from the same Go
 source of truth. Bytes differ run to run only because the generator mints fresh
@@ -234,6 +274,10 @@ engine. Missing, and known missing:
 
 - **The PQ legs.** No ML-DSA / SLH-DSA / Ringtail. Go `protocol/quasar` is 15k
   lines of them.
+- **The FPC round.** `fpc.hpp` derives the seed and computes θ and α, and is held
+  to Go's corpus for both. Nothing in `wave` calls it yet: the wave still sizes
+  its threshold from the fixed ⅔ rule, so the adaptive path is proven correct and
+  not yet wired.
 - **A StakeSource.** The validator set is frozen at engine construction; Go reads
   stake and pubkeys at the block's P-chain epoch height.
 - **The sampling round-trip.** `photon` samples and `wave` tallies, but no
