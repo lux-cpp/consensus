@@ -448,8 +448,18 @@ void BM_InG2(benchmark::State& st) {
 }
 BENCHMARK(BM_InG2);
 
-// The pairing itself: hash-to-curve + two Miller loops + final exponentiation,
-// with both points already decompressed and both group checks already paid.
+// THE PAIRING, TWO WAYS. blst offers two entry points for one signature, and
+// which one a binding picks is worth 8% of every verification:
+//
+//   PairDirect    blst_core_verify_pk_in_g1 — both points in one generic
+//                 multi-Miller loop. What this leg used to call.
+//   PairFixedGen  accumulate e(pk, H(m)), then pair the signature against the
+//                 FIXED generator with blst_aggregated_in_g2. What the Go and
+//                 Rust bindings call, and what bls::pair now calls.
+//
+// Both are timed so the choice stays visible: it is the reason the C++ figure
+// once looked like a language difference, and a future rewrite that quietly
+// goes back to the direct call will show up here.
 void BM_CoreVerifyOnly(benchmark::State& st) {
     const Committee c = committee(1);
     blst_p1_affine pk{};
@@ -466,10 +476,21 @@ void BM_CoreVerifyOnly(benchmark::State& st) {
 }
 BENCHMARK(BM_CoreVerifyOnly);
 
-// C++ on Go's terms: public key cached decompressed and unvalidated, signature
-// decompressed and group-checked per call, then the pairing. This is the figure
-// that is comparable to the Go leg's VerifyOne.
-void BM_VerifyMatchedToGo(benchmark::State& st) {
+void BM_PairFixedGen(benchmark::State& st) {
+    const Committee c = committee(1);
+    blst_p1_affine pk{};
+    blst_p2_affine sig{};
+    blst_p1_uncompress(&pk, c.pks[0].data());
+    blst_p2_uncompress(&sig, c.sigs[0].data());
+    for (auto _ : st) benchmark::DoNotOptimize(bls::pair(pk, sig, c.msg.data(), c.msg.size()));
+}
+BENCHMARK(BM_PairFixedGen);
+
+// C++ on the other legs' terms: public key cached decompressed and unvalidated,
+// signature decompressed and group-checked per call, then the pairing THEY
+// call. This is the figure comparable to Go's VerifyMatched and Rust's
+// matched/verify — the same blst calls in the same order.
+void BM_VerifyMatched(benchmark::State& st) {
     const Committee c = committee(1);
     blst_p1_affine pk{};
     blst_p1_uncompress(&pk, c.pks[0].data());
@@ -477,16 +498,13 @@ void BM_VerifyMatchedToGo(benchmark::State& st) {
         blst_p2_affine sig{};
         BLST_ERROR e = blst_p2_uncompress(&sig, c.sigs[0].data());
         bool grp = blst_p2_affine_in_g2(&sig);
-        BLST_ERROR v = blst_core_verify_pk_in_g1(&pk, &sig, true,
-                                                 c.msg.data(), c.msg.size(),
-                                                 reinterpret_cast<const std::uint8_t*>(kDST),
-                                                 kDSTLen, nullptr, 0);
+        bool v = bls::pair(pk, sig, c.msg.data(), c.msg.size());
         benchmark::DoNotOptimize(e);
         benchmark::DoNotOptimize(grp);
         benchmark::DoNotOptimize(v);
     }
 }
-BENCHMARK(BM_VerifyMatchedToGo);
+BENCHMARK(BM_VerifyMatched);
 
 }  // namespace
 
