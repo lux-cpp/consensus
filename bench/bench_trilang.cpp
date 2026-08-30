@@ -348,11 +348,13 @@ void BM_FastAggVerifyFromPoints(benchmark::State& st) {
         for (std::size_t i = 1; i < n; ++i) blst_p1_add_or_double_affine(&acc, &acc, &keys[i]);
         blst_p1_affine sum{};
         blst_p1_to_affine(&sum, &acc);
-        BLST_ERROR e = blst_core_verify_pk_in_g1(&sum, &agg, true, c.msg.data(), c.msg.size(),
-                                                 reinterpret_cast<const std::uint8_t*>(kDST), kDSTLen,
-                                                 nullptr, 0);
-        if (e != BLST_SUCCESS) st.SkipWithError("aggregate pairing");
-        benchmark::DoNotOptimize(e);
+        // bls::pair, not blst_core_verify_pk_in_g1 — the Go and Rust legs reach
+        // this row through their bindings' pairing, so reaching it through the
+        // other entry point would put an 8% entry-point difference into a row
+        // about summing public keys.
+        const bool ok = bls::pair(sum, agg, c.msg.data(), c.msg.size());
+        if (!ok) st.SkipWithError("aggregate pairing");
+        benchmark::DoNotOptimize(ok);
     }
 }
 BENCHMARK(BM_FastAggVerifyFromPoints)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
