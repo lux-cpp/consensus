@@ -20,6 +20,7 @@
 //                          EqualStakeSupermajorityThreshold, AlphaForK (ceil).
 
 #include "lux/consensus/bls.hpp"
+#include "lux/consensus/cert.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
 #include "lux/consensus/threshold.hpp"
 #include "lux/consensus/wave.hpp"
@@ -313,6 +314,164 @@ void committee() {
           "feasible(41) quorum is 28 — the size the float representation missed");
 }
 
+
+// ── 5. the certificate on the wire ───────────────────────────────────────────
+// The layout, field by field, then the property that makes a certificate an
+// identity: re-encoding what was decoded reproduces the bytes exactly. A codec
+// that round-trips loosely gives one certificate many byte strings, and
+// anything that treats those bytes as a name — a cache key, a dedup, a digest —
+// can then be split by flipping a bit no field reads.
+void cert_wire() {
+    banner("certificate wire — chain.QuorumCert MarshalBinary/UnmarshalBinary (280-byte header)");
+    for (const Row& r : load("cert_wire.json")) {
+        const std::string name = field(r, "name");
+        const std::vector<std::uint8_t> wire = unhex(field(r, "wire"));
+        check(wire.size() == u64(r, "length"), name + ": the corpus length is the corpus bytes");
+
+        Refusal why = Refusal::Wire;
+        const std::optional<Cert> got = Cert::decode(wire.data(), wire.size(), why);
+        if (!got) {
+            check(false, name + ": decodes (refused: " + refusal_name(why) + ")");
+            continue;
+        }
+        check(got->version == u64(r, "version"), name + ": version");
+        check(got->role == u64(r, "qc_type"), name + ": role byte");
+        check(static_cast<std::uint64_t>(got->tier) == u64(r, "tier"), name + ": tier");
+        check(got->threshold == u64(r, "threshold"), name + ": threshold");
+        check(got->votes.size() == u64(r, "vote_count"), name + ": vote count");
+
+        const VotePosition& p = got->position;
+        check(p.chain_id == fixed<32>(r, "chain_id"), name + ": chain id");
+        check(p.height == u64(r, "height"), name + ": height");
+        check(p.round == u64(r, "round"), name + ": round");
+        check(p.block_id == fixed<32>(r, "block_id"), name + ": block id");
+        check(p.parent_id == fixed<32>(r, "parent_id"), name + ": parent id");
+        check(p.canonical_id == fixed<32>(r, "canonical_id"), name + ": canonical id");
+        check(p.parent_canonical_id == fixed<32>(r, "parent_canonical_id"), name + ": parent canonical id");
+        check(p.execution_state_root == fixed<32>(r, "execution_state_root"), name + ": execution state root");
+        check(p.payload_root == fixed<32>(r, "payload_root"), name + ": payload root");
+        check(p.validator_set_root == fixed<32>(r, "validator_set_root"), name + ": validator set root");
+
+        const std::vector<std::uint8_t> again = got->encode();
+        check(again == wire, name + ": re-encoding reproduces Go's bytes exactly");
+    }
+}
+
+// ── 6. what the decoder must REFUSE ──────────────────────────────────────────
+// These mutations are not in the corpus, because the corpus records what Go
+// answers and Go's encoder cannot produce any of them. Refusal is the only
+// sound answer to a byte string no encoder emits: admitting one would give a
+// certificate a second name. Each mutation is derived from a corpus wire, so
+// the cases stay in step with the layout rather than restating it.
+void cert_wire_strict() {
+    banner("certificate wire — fail-closed on what no encoder can produce");
+    const std::vector<Row> rows = load("cert_wire.json");
+    if (rows.empty()) die("cert_wire.json is empty");
+
+    auto refused = [](const std::vector<std::uint8_t>& b) {
+        Refusal why = Refusal::None;
+        return !Cert::decode(b.data(), b.size(), why).has_value();
+    };
+
+    for (const Row& r : rows) {
+        const std::string name = field(r, "name");
+        const std::vector<std::uint8_t> wire = unhex(field(r, "wire"));
+
+        // A trailing byte: the same certificate, a second byte string.
+        std::vector<std::uint8_t> trailing = wire;
+        trailing.push_back(0x00);
+        check(refused(trailing), name + ": a trailing byte is refused");
+
+        // Every truncation. A short read must never be filled in.
+        bool every_prefix_refused = true;
+        for (std::size_t n = 0; n < wire.size(); ++n) {
+            if (!refused(std::vector<std::uint8_t>(wire.begin(), wire.begin() + std::ptrdiff_t(n))))
+                every_prefix_refused = false;
+        }
+        check(every_prefix_refused, name + ": every truncation is refused");
+    }
+
+    // The rest need a certificate that HAS a vote to mutate. The header ends at
+    // byte 280; the vote count is the four bytes before that.
+    const std::vector<std::uint8_t> wire = unhex(field(rows.front(), "wire"));
+    check(wire.size() > kCertHeaderLen, "the first corpus certificate carries a vote to mutate");
+
+    // vote_count = 0xFFFFFFFF. Refused in O(1), before anything is allocated.
+    std::vector<std::uint8_t> huge = wire;
+    for (std::size_t i = kCertHeaderLen - 4; i < kCertHeaderLen; ++i) huge[i] = 0xFF;
+    check(refused(huge), "an impossible vote count is refused before allocation");
+
+    // The accept byte is one byte with two meanings. Anything else is a frame
+    // the encoder cannot emit — and a decoder that folded 254 other values to
+    // "true" would re-encode them as 1, which is the second-name defect.
+    std::size_t accepted_junk = 0;
+    for (unsigned v = 2; v < 256; ++v) {
+        std::vector<std::uint8_t> junk = wire;
+        junk[kCertHeaderLen + kNodeLen] = static_cast<std::uint8_t>(v);
+        if (!refused(junk)) ++accepted_junk;
+    }
+    check(accepted_junk == 0, "the accept byte admits 0 and 1 and nothing else");
+}
+
+// ── 7. the finality predicate ────────────────────────────────────────────────
+// Real committees, real BLS signatures, and Go's verdict for each — including
+// every clause that REFUSES, which is where an implementation that "agrees"
+// usually turns out not to.
+void cert_verify() {
+    banner("certificate predicate — chain.QuorumCert.Verify, clause by clause");
+    std::size_t ok_rows = 0, refuse_rows = 0;
+    for (const Row& r : load("cert_verify.json")) {
+        const std::string name = field(r, "name");
+        const std::size_t n = static_cast<std::size_t>(u64(r, "set_size"));
+        const std::vector<std::uint8_t> nodes = unhex(field(r, "nodes"));
+        const std::vector<std::uint8_t> pks = unhex(field(r, "pubkeys"));
+        if (nodes.size() != n * kNodeLen || pks.size() != n * 48)
+            die(name + ": the row's validator set is not " + std::to_string(n) + " entries wide");
+
+        Registry set;
+        for (std::size_t i = 0; i < n; ++i) {
+            Node id{};
+            PubKey pk{};
+            std::copy_n(nodes.begin() + std::ptrdiff_t(i * kNodeLen), kNodeLen, id.begin());
+            std::copy_n(pks.begin() + std::ptrdiff_t(i * 48), 48, pk.begin());
+            if (!set.insert(id, pk)) die(name + ": Go's public key " + std::to_string(i) + " did not register");
+        }
+
+        const std::vector<std::uint8_t> wire = unhex(field(r, "wire"));
+        Refusal why = Refusal::Wire;
+        const std::optional<Cert> cert = Cert::decode(wire.data(), wire.size(), why);
+        if (!cert) {
+            check(false, name + ": decodes (refused: " + std::string(refusal_name(why)) + ")");
+            continue;
+        }
+        const std::string got = refusal_name(cert->verify(set));
+        const std::string want = field(r, "expect");
+        check(got == want, name + ": Verify answers " + want + (got == want ? "" : " (got " + got + ")"));
+        (want == "ok" ? ok_rows : refuse_rows)++;
+    }
+    std::printf("   %zu certificates accepted, %zu refused — every clause of Verify\n", ok_rows, refuse_rows);
+}
+
+// ── 8. the two C++ certificates are two objects ──────────────────────────────
+// Not a corpus check — an arithmetic one, stated here so it cannot be forgotten.
+// QuorumCertEngine's certificate carries public keys and ONE aggregate
+// signature; the portable certificate carries node ids and a signature per
+// voter. They are different sizes, they hold different material, and neither
+// can read the other's bytes. Reporting a timing of one beside the other
+// languages' timing of the other would report the choice of algorithm as a
+// language result.
+void cert_shapes() {
+    banner("the two certificate shapes — the aggregate gate and the portable witness");
+    check(sizeof(PubKey) == 48 && sizeof(Node) == kNodeLen,
+          "the aggregate cert is keyed by a 48-byte key; the portable one by a 20-byte node id");
+    check(kCertHeaderLen == 280, "the portable header is 280 bytes — Go's qcHeaderSize");
+    check(kCertVoteFixedLen == 25, "one vote record's fixed part is 25 bytes — Go's qcVoteFixed");
+    // 313 = 280 header + 20 node + 1 accept + 4 length + 8 signature. The
+    // smallest well-formed certificate, and the number the Go corpus records.
+    check(kCertHeaderLen + kCertVoteFixedLen + 8 == 313,
+          "the smallest well-formed certificate is 313 bytes, as Go records it");
+}
+
 }  // namespace
 
 int main() {
@@ -323,10 +482,14 @@ int main() {
     vote_signature();
     stake_floor();
     committee();
+    cert_wire();
+    cert_wire_strict();
+    cert_verify();
+    cert_shapes();
 
     std::printf("\n----------------------------------------------------------------\n");
     std::printf("checks: %d passed, %d failed\n", g_pass, g_fail);
     if (g_fail) { std::printf("==== GO CONFORMANCE: FAIL ====\n"); return 1; }
-    std::printf("==== GO CONFORMANCE: PASS — message, domain, floors, committee ====\n");
+    std::printf("==== GO CONFORMANCE: PASS — message, domain, floors, committee, certificate ====\n");
     return 0;
 }
