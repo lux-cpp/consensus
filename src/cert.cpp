@@ -247,10 +247,9 @@ bool Registry::verify(const Node& node,
     // The signature's group check, once. The key's was paid at insert.
     if (!blst_p2_affine_in_g2(&sig)) return false;
 
-    return blst_core_verify_pk_in_g1(&it->second->pk, &sig, /*hash_or_encode=*/true,
-                                     message, message_len,
-                                     reinterpret_cast<const std::uint8_t*>(bls::kVoteDST),
-                                     bls::kVoteDSTLen, nullptr, 0) == BLST_SUCCESS;
+    // ONE pairing, in bls.cpp. A validator set does not get its own opinion
+    // about how a signature is checked.
+    return bls::pair(it->second->pk, sig, message, message_len);
 }
 
 }  // namespace lux::consensus

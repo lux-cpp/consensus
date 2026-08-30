@@ -10,6 +10,9 @@
 
 #include <blst.h>
 
+#include <cstddef>
+#include <vector>
+
 namespace lux::consensus::bls {
 
 namespace {
@@ -59,6 +62,31 @@ int sign(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len
     return 0;
 }
 
+bool pair(const blst_p1_affine& pk, const blst_p2_affine& sig,
+          const std::uint8_t* msg, std::size_t msg_len) noexcept {
+    // blst_pairing is opaque, alignment-sensitive, and sized at RUNTIME — 3192
+    // bytes in this build. A fixed buffer would be a number that can go stale,
+    // and the first draft of this function guessed 1024 and silently refused
+    // every valid signature until the corpus said so. So the arena is sized by
+    // asking, once per thread, and its element type carries the alignment.
+    static thread_local std::vector<std::max_align_t> arena(
+        (blst_pairing_sizeof() + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+    auto* ctx = reinterpret_cast<blst_pairing*>(arena.data());
+
+    blst_pairing_init(ctx, /*hash_or_encode=*/true, dst(), kVoteDSTLen);
+    // The public key side only: e(pk, H(msg)) into the Miller accumulator.
+    if (blst_pairing_aggregate_pk_in_g1(ctx, &pk, /*signature=*/nullptr,
+                                        msg, msg_len, /*aug=*/nullptr, 0) != BLST_SUCCESS)
+        return false;
+    blst_pairing_commit(ctx);
+
+    // The signature side against the fixed generator, which blst pairs faster
+    // than a generic point.
+    blst_fp12 gt;
+    blst_aggregated_in_g2(&gt, &sig);
+    return blst_pairing_finalverify(ctx, &gt);
+}
+
 int verify(const std::uint8_t pk[48], const std::uint8_t* msg, std::size_t msg_len,
            const std::uint8_t sig[96]) noexcept {
     if (pk == nullptr || sig == nullptr) return -1;
@@ -69,10 +97,7 @@ int verify(const std::uint8_t pk[48], const std::uint8_t* msg, std::size_t msg_l
     blst_p2_affine sig_aff;
     if (blst_p2_uncompress(&sig_aff, sig) != BLST_SUCCESS) return -1;
     if (!blst_p2_affine_in_g2(&sig_aff)) return 1;
-    const BLST_ERROR rc = blst_core_verify_pk_in_g1(&pk_aff, &sig_aff, /*hash_or_encode=*/true,
-                                                    msg, msg_len, dst(), kVoteDSTLen,
-                                                    /*aug=*/nullptr, /*aug_len=*/0);
-    return rc == BLST_SUCCESS ? 0 : 1;
+    return pair(pk_aff, sig_aff, msg, msg_len) ? 0 : 1;
 }
 
 int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
