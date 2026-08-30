@@ -9,24 +9,39 @@
 // v0.3.16. What differs between the three numbers is then the language and the
 // binding, which is the thing being measured.
 //
-// TWO CERTIFICATE PREDICATES ARE TIMED, deliberately:
+// TWO CERTIFICATE PREDICATES ARE TIMED, deliberately, and they are NOT two
+// measurements of the same thing:
 //
-//   cert_verify_persig  — one pairing PER VOTE, the loop Go's QuorumCert.Verify
-//                         and Rust's Cert::verify run. Written here so the C++
-//                         number has a counterpart that does the same work.
-//   verify_cert         — QuorumCertEngine::verify_cert, the shipped C++ gate:
-//                         sum the n public keys, ONE aggregate pairing.
+//   Cert::verify        — the PORTABLE certificate (cert.hpp): node ids and a
+//                         signature per voter, one pairing PER VOTE. This is
+//                         the object Go assembles and Rust decodes, and since
+//                         it now passes the Go corpus clause by clause, this
+//                         row is comparable to Go's QuorumCert.Verify and
+//                         Rust's Cert::verify. It is the only certificate row
+//                         that is.
+//   verify_cert         — QuorumCertEngine::verify_cert, the C++ LOCAL gate:
+//                         public keys and ONE aggregate signature, one pairing
+//                         total. No Go or Rust counterpart exists, because
+//                         neither implementation has this object. Timed so the
+//                         cost of the choice is visible, never as "C++ verifies
+//                         certificates n times faster".
 //
-// These are different algorithms at the same n. Reporting only the second beside
-// the other languages' first would report the algorithm as a language result.
+// AGGREGATION IS TIMED THREE WAYS for the same reason. The three legs were
+// handing their aggregators different inputs under one name: Rust summed
+// already-decompressed signatures with the group check off, Go summed
+// decompressed signatures with it on, and C++ summed COMPRESSED bytes and paid
+// to decompress every one. That is a sixtyfold spread with no language in it.
+// Each variant is now named for the work it does.
 
 #include "lux/consensus/bls.hpp"
+#include "lux/consensus/cert.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
 
 #include <benchmark/benchmark.h>
 
 #include <blst.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +53,11 @@ using namespace lux::consensus;
 namespace {
 
 constexpr std::uint64_t kStakePer = 1000;
+
+// The consensus vote domain, spelled once for the blst calls that take it raw.
+constexpr char kDST[] = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
+constexpr std::size_t kDSTLen = sizeof(kDST) - 1;
+
 
 void be64(std::uint8_t* out, std::uint64_t v) {
     for (int i = 7; i >= 0; --i) { out[i] = std::uint8_t(v & 0xFF); v >>= 8; }
@@ -110,6 +130,17 @@ Committee committee(std::size_t n) {
     return c;
 }
 
+// ── the harness floor ───────────────────────────────────────────────────────
+// What one iteration costs when the body does nothing. The nanosecond-scale
+// rows are only readable against it — and this build links a google-benchmark
+// the distribution compiled without NDEBUG, which the library says so itself on
+// every run. This row is how much that warning is worth.
+void BM_Empty(benchmark::State& st) {
+    std::uint64_t n = 0;
+    for (auto _ : st) benchmark::DoNotOptimize(++n);
+}
+BENCHMARK(BM_Empty);
+
 // ── the canonical message ───────────────────────────────────────────────────
 void BM_VoteMessage(benchmark::State& st) {
     const VotePosition p = position();
@@ -138,27 +169,126 @@ void BM_VerifyOne(benchmark::State& st) {
 }
 BENCHMARK(BM_VerifyOne);
 
-// ── the O(n) predicate — what Go and Rust run ───────────────────────────────
-void BM_CertVerifyPerSig(benchmark::State& st) {
-    const std::size_t n = std::size_t(st.range(0));
-    const Committee c = committee(n);
+// ── the portable certificate — the row Go and Rust have a counterpart for ───
+// A committee of n, its certificate, and the validator set that resolves the
+// voters. Keys are registered once (uncompressed and subgroup-checked there),
+// exactly as Go's verifier and Rust's Registry do, so a per-verify figure is
+// about the signature being checked and not about a key already trusted.
+struct Portable {
+    Committee                 c;
+    Cert                      cert;
+    Registry                  set;
+    std::vector<std::uint8_t> wire;
+};
+
+Portable portable(std::size_t n) {
+    Portable p;
+    p.c = committee(n);
+    p.cert.version   = kQuorumCertVersion;
+    p.cert.role      = kQCFinality;
+    p.cert.tier      = Tier::Quasar;
+    p.cert.position  = p.c.pos;
+    p.cert.threshold = std::uint32_t(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        Node id{};
+        be64(id.data(), std::uint64_t(i) + 1);
+        if (!p.set.insert(id, p.c.pks[i])) throw std::runtime_error("registry insert");
+        p.cert.votes.push_back(Vote{id, true, std::vector<std::uint8_t>(p.c.sigs[i].begin(), p.c.sigs[i].end())});
+    }
+    p.wire = p.cert.encode();
+    // A benchmark of a predicate that refuses measures the refusal path.
+    if (p.cert.verify(p.set) != Refusal::None) throw std::runtime_error("committee does not verify");
+    return p;
+}
+
+void BM_CertVerify(benchmark::State& st) {
+    const Portable p = portable(std::size_t(st.range(0)));
     for (auto _ : st) {
-        bool ok = true;
-        for (std::size_t i = 0; i < n; ++i) {
-            if (i > 0 && !(c.pks[i - 1] < c.pks[i])) { ok = false; break; }
-            if (bls::verify(c.pks[i].data(), c.msg.data(), c.msg.size(), c.sigs[i].data()) != 0) {
-                ok = false;
-                break;
-            }
-        }
-        if (!ok) st.SkipWithError("per-sig verify");
-        benchmark::DoNotOptimize(ok);
+        Refusal r = p.cert.verify(p.set);
+        if (r != Refusal::None) st.SkipWithError(refusal_name(r));
+        benchmark::DoNotOptimize(r);
     }
 }
-BENCHMARK(BM_CertVerifyPerSig)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+BENCHMARK(BM_CertVerify)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
 
-// ── aggregation ─────────────────────────────────────────────────────────────
-void BM_Aggregate(benchmark::State& st) {
+// ── the wire, both directions — Rust times the same two ─────────────────────
+void BM_CertEncode(benchmark::State& st) {
+    const Portable p = portable(std::size_t(st.range(0)));
+    for (auto _ : st) benchmark::DoNotOptimize(p.cert.encode());
+}
+BENCHMARK(BM_CertEncode)->Arg(1)->Arg(21)->Arg(100);
+
+void BM_CertDecode(benchmark::State& st) {
+    const Portable p = portable(std::size_t(st.range(0)));
+    for (auto _ : st) {
+        Refusal why = Refusal::None;
+        auto got = Cert::decode(p.wire.data(), p.wire.size(), why);
+        if (!got) st.SkipWithError("decode");
+        benchmark::DoNotOptimize(got);
+    }
+}
+BENCHMARK(BM_CertDecode)->Arg(1)->Arg(21)->Arg(100);
+
+// ── a finality ROUND ────────────────────────────────────────────────────────
+// What the three legs stopped short of. A round is not a predicate; it is the
+// work a node does to turn a position into an admitted certificate. Split by
+// WHO PAYS, because the three parties pay different amounts:
+//
+//   sign    one validator's own cost. Builds the canonical message and signs it
+//           ONCE. Independent of n — a validator does not sign n times.
+//   collect the assembling node: sort the votes into canonical order and encode.
+//           O(n), and no curve arithmetic at all.
+//   admit   a follower's cost: decode the gossiped bytes and run the predicate.
+//           O(n) pairings, and the critical path of finality.
+//
+// A single "round" number would hide that admit is the only one on the path and
+// that sign does not grow with the committee.
+void BM_RoundSign(benchmark::State& st) {
+    const Committee c = committee(1);
+    Signature sig{};
+    for (auto _ : st) {
+        const std::vector<std::uint8_t> msg = canonical_vote_message(c.pos);
+        if (bls::sign(c.sk0.data(), msg.data(), msg.size(), sig.data()) != 0) st.SkipWithError("sign");
+        benchmark::DoNotOptimize(sig);
+    }
+}
+BENCHMARK(BM_RoundSign);
+
+void BM_RoundCollect(benchmark::State& st) {
+    const Portable p = portable(std::size_t(st.range(0)));
+    for (auto _ : st) {
+        Cert c = p.cert;
+        // Canonical order is the assembler's job: the votes arrive in whatever
+        // order they were gossiped, and the certificate's bytes are the sorted
+        // ones. Reversing first makes the sort do work rather than confirm it.
+        std::reverse(c.votes.begin(), c.votes.end());
+        std::sort(c.votes.begin(), c.votes.end(),
+                  [](const Vote& a, const Vote& b) { return a.node < b.node; });
+        benchmark::DoNotOptimize(c.encode());
+    }
+}
+BENCHMARK(BM_RoundCollect)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+
+void BM_RoundAdmit(benchmark::State& st) {
+    const Portable p = portable(std::size_t(st.range(0)));
+    for (auto _ : st) {
+        Refusal why = Refusal::None;
+        auto got = Cert::decode(p.wire.data(), p.wire.size(), why);
+        if (!got) { st.SkipWithError("decode"); break; }
+        Refusal r = got->verify(p.set);
+        if (r != Refusal::None) { st.SkipWithError(refusal_name(r)); break; }
+        benchmark::DoNotOptimize(r);
+    }
+}
+BENCHMARK(BM_RoundAdmit)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+
+// ── aggregation, by the work it does ────────────────────────────────────────
+// AggregateFromCompressed is what bls::aggregate_sigs offers: n compressed
+// signatures in, one out, so it pays an uncompress and a subgroup check per
+// signature. AggregateFromPoints is the sum alone, over points already
+// decompressed and already checked. The gap between them is not a language
+// difference; it is what the caller was asked to hand in.
+void BM_AggregateFromCompressed(benchmark::State& st) {
     const std::size_t n = std::size_t(st.range(0));
     const Committee c = committee(n);
     Signature agg{};
@@ -167,10 +297,30 @@ void BM_Aggregate(benchmark::State& st) {
         benchmark::DoNotOptimize(agg);
     }
 }
-BENCHMARK(BM_Aggregate)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+BENCHMARK(BM_AggregateFromCompressed)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+
+void BM_AggregateFromPoints(benchmark::State& st) {
+    const std::size_t n = std::size_t(st.range(0));
+    const Committee c = committee(n);
+    std::vector<blst_p2_affine> pts(n);
+    for (std::size_t i = 0; i < n; ++i)
+        if (blst_p2_uncompress(&pts[i], c.sigs[i].data()) != BLST_SUCCESS)
+            throw std::runtime_error("uncompress");
+    for (auto _ : st) {
+        blst_p2 acc{};
+        blst_p2_from_affine(&acc, &pts[0]);
+        for (std::size_t i = 1; i < n; ++i) blst_p2_add_or_double_affine(&acc, &acc, &pts[i]);
+        benchmark::DoNotOptimize(acc);
+    }
+}
+BENCHMARK(BM_AggregateFromPoints)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
 
 // ── the O(1) predicate — sum the keys, one pairing ──────────────────────────
-void BM_FastAggVerify(benchmark::State& st) {
+// FromCompressed decompresses and subgroup-checks all n keys on every call.
+// FromPoints starts from keys a validator set already holds decompressed, which
+// is what Go's leg is handed. Both are here so the row that is compared is the
+// row that does the same work.
+void BM_FastAggVerifyFromCompressed(benchmark::State& st) {
     const std::size_t n = std::size_t(st.range(0));
     const Committee c = committee(n);
     for (auto _ : st) {
@@ -180,7 +330,32 @@ void BM_FastAggVerify(benchmark::State& st) {
         benchmark::DoNotOptimize(rc);
     }
 }
-BENCHMARK(BM_FastAggVerify)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+BENCHMARK(BM_FastAggVerifyFromCompressed)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
+
+void BM_FastAggVerifyFromPoints(benchmark::State& st) {
+    const std::size_t n = std::size_t(st.range(0));
+    const Committee c = committee(n);
+    std::vector<blst_p1_affine> keys(n);
+    for (std::size_t i = 0; i < n; ++i)
+        if (blst_p1_uncompress(&keys[i], c.pks[i].data()) != BLST_SUCCESS)
+            throw std::runtime_error("uncompress pk");
+    blst_p2_affine agg{};
+    if (blst_p2_uncompress(&agg, c.agg.data()) != BLST_SUCCESS) throw std::runtime_error("uncompress agg");
+
+    for (auto _ : st) {
+        blst_p1 acc{};
+        blst_p1_from_affine(&acc, &keys[0]);
+        for (std::size_t i = 1; i < n; ++i) blst_p1_add_or_double_affine(&acc, &acc, &keys[i]);
+        blst_p1_affine sum{};
+        blst_p1_to_affine(&sum, &acc);
+        BLST_ERROR e = blst_core_verify_pk_in_g1(&sum, &agg, true, c.msg.data(), c.msg.size(),
+                                                 reinterpret_cast<const std::uint8_t*>(kDST), kDSTLen,
+                                                 nullptr, 0);
+        if (e != BLST_SUCCESS) st.SkipWithError("aggregate pairing");
+        benchmark::DoNotOptimize(e);
+    }
+}
+BENCHMARK(BM_FastAggVerifyFromPoints)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
 
 // ── the shipped gate, whole ─────────────────────────────────────────────────
 // QuorumCertEngine::verify_cert: the structural clauses, the recomputed stake
@@ -228,9 +403,6 @@ BENCHMARK(BM_EngineVerifyCert)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
 //                                   core_verify.
 //
 // BM_VerifyMatchedToGo runs the C++ side of that comparison on Go's terms.
-
-constexpr char kDST[] = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
-constexpr std::size_t kDSTLen = sizeof(kDST) - 1;
 
 void BM_UncompressPK(benchmark::State& st) {
     const Committee c = committee(1);
