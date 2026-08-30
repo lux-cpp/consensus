@@ -26,6 +26,13 @@
 // positive case here still passes under a preimage written end to end, because
 // inside one case no length varies. The pairs are what catch a port that
 // dropped the length prefixes and looks green.
+//
+// The FIXED threshold is checked here too, at every committee size from 4 to
+// 1000 rather than at a sample. The sizes where two rules agree are exactly the
+// sizes a sample would pick — the default committee of 21 is one of the
+// twenty-five out of nine hundred and ninety-seven where all of Go's routes to
+// α give one number. A sweep is the only shape of evidence that means anything
+// for a constraint whose wording is "every committee size".
 
 #include "lux/consensus/fpc.hpp"
 #include "lux/consensus/threshold.hpp"
@@ -232,7 +239,45 @@ void theta_plane() {
     std::printf("    %zu phases, %zu thresholds\n", cases.size(), alphas);
 }
 
-// ── 4. refusal, which is part of the definition ──────────────────────────────
+// ── 4. the fixed threshold, at every committee size ─────────────────────────
+void quorum_plane() {
+    banner("quorum — the vote count a round accepts on, k = 4..1000 (quorum_alpha.json)");
+    const json::Value v = load("quorum_alpha.json");
+    const json::Value& cases = v.at("cases");
+
+    // The standing constraint on this tree reads: quorum arithmetic must be
+    // exact integer arithmetic and must equal Go at EVERY committee size,
+    // n=41 → 28 included. It has been a claim. This is the measurement.
+    std::size_t wrong = 0, lossy = 0;
+    bool saw41 = false;
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        const json::Value& c = cases[i];
+        const auto k = static_cast<std::uint32_t>(c.at("k").u64());
+        const auto want = static_cast<std::uint32_t>(c.at("alpha").u64());
+        const std::uint32_t got = equal_stake_supermajority(k);
+        if (got != want) {
+            if (wrong < 5)
+                check(false, "k=" + std::to_string(k) + ": go " + std::to_string(want) + ", cpp " +
+                                 std::to_string(got));
+            ++wrong;
+        }
+        if (k == 41) {
+            saw41 = true;
+            check(got == 28, "k=41 must be 28, this build says " + std::to_string(got));
+        }
+        if (c.at("alpha_recovered_from_the_ratio").u64() != want) ++lossy;
+    }
+    check(wrong == 0, std::to_string(wrong) + " committee sizes disagree with Go on the rule");
+    check(saw41, "the corpus does not carry k=41, the size the constraint names");
+    check(cases.size() == v.at("committee_sizes_checked").u64(),
+          "the corpus counts a different number of sizes than it carries");
+
+    std::printf("    %zu committee sizes, %zu disagree with the rule\n", cases.size(), wrong);
+    std::printf("    %zu of them are sizes where Go's OWN ratio recovery returns a different\n", lossy);
+    std::printf("    count than its rule — recorded, not conformed to; see RULINGS.md\n");
+}
+
+// ── 5. refusal, which is part of the definition ──────────────────────────────
 void refusal_plane() {
     banner("refusal — an empty seed is not a threshold");
     // Go's NewSelector returns ErrEmptySeed. A port that hashes nothing and
@@ -259,6 +304,7 @@ int main() {
         epoch_seed_plane();
         separation_plane();
         theta_plane();
+        quorum_plane();
         refusal_plane();
     } catch (const std::exception& e) {
         die(e.what());
