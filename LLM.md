@@ -94,7 +94,7 @@ says exactly that and no more. If the aggregate fails, a forged sig is present:
 individual verifies evict it and refund its stake, after which every survivor is
 verified and the block's later votes each pay their own pairing.
 
-`Node::poll` names a block by **id**, and reads the position back from the gate.
+`Party::poll` names a block by **id**, and reads the position back from the gate.
 A caller cannot hand it a foreign position — which used to make the node sign a
 vote its own gate would evict AND burn the wrong equivocation slot.
 
@@ -106,14 +106,25 @@ A certificate is only as sound as the set it is checked against, and until
 MANY node ids. A two-signer floor was then cleared by one signature, and nothing
 downstream could catch it — the verifier is right to accept a set that says two
 nodes signed. `admit()` is the one door, and it enforces Go
-`validator/registration.go` clause for clause:
+`validator/registration.go` clause for clause, **in the order the code runs
+them**:
 
 ```
+KEY          a registration with no key at all cannot sign
+ZERO WEIGHT  before the pairing — free, and refused whatever the proof says
+             (Go checks r.Weight == 0 ahead of pop.Verify for the same reason)
 ENCODING     canonical compressed G1 key, canonical compressed G2 proof
 POSSESSION   bls::pop_verify — the proof binds THIS key to THIS node
 UNIQUENESS   one key ↔ one node, on BOTH axes (neither implies the other)
 WEIGHT       counted last — weight counted before uniqueness is counted twice
 ```
+
+ENCODING and POSSESSION are one call. `bls::pop_verify` owns **one point, one
+encoding** as part of its Key leg — the key must be the canonical spelling of the
+point it decodes to — because that is where Go keeps it (`pop.Verify`), so the
+next caller of the primitive inherits the rule instead of having to remember it.
+blst refuses a non-canonical `x` on the way in, so the clause is a wall behind a
+wall: 401,016 swept candidates, 101,541 of which decode, 0 non-canonical.
 
 Possession alone is **not** enough, and that is the whole reason uniqueness is a
 separate clause: the holder of a key can mint a genuine node-bound proof for any
@@ -123,8 +134,18 @@ individually sound. Only a rule over the SET refuses it.
 The set is admitted **whole or not at all** — one bad registration fails the call
 rather than being dropped, because a set that silently loses a signer has a total
 weight that no longer describes it, and both stake floors are taken of that
-total. The walk is in node-id order, so which registration a set is refused on is
-a function of the set and not of the caller's vector order.
+total.
+
+**The verdict and the admitted set are functions of the SET; the refusal REASON
+is only for sets of distinct node ids.** The walk is a *stable* sort on the node
+id, which is total exactly when the ids are distinct. Two registrations sharing a
+node id it cannot separate, so their input order survives into the walk and can
+decide which clause answers — one that stakes nothing and one whose proof was
+minted elsewhere refuse as `zero_weight` or `possession` depending on which is
+written first. Both orders refuse, and neither leaves a partial set. Go does the
+same thing (`slices.SortStableFunc`), so this is parity, not drift: a tie-break
+on the key would make the reason total at the cost of the parity, to buy a reason
+nobody consumes. `test/registration_test.cpp` [6] pins both halves.
 
 `CanonicalSet` is ordered ascending by the **compressed** key (never the
 uncompressed form, which is 96 bytes under one crypto build and 48 under another
@@ -133,19 +154,42 @@ and orders the same set two ways). It is the one producer of a
 (`install()`, which refuses a non-empty registry so a retired set cannot carry
 over into a live one).
 
+**`install()` is the ONE seating route, and the seat holds the rule itself.**
+`Registry::insert` is private with `CanonicalSet` its only friend, so there is no
+hand to build a registry with; and because `CanonicalSet` is a plain aggregate
+that anyone can write down without going through `admit()`, `insert` refuses a
+key already seated under another node and a node already seated (Go's
+`ErrDuplicateKey` / `ErrDuplicateNode`). A forged set therefore seats **nothing**:
+`install` builds beside the caller's registry and moves in only on full success,
+so a midway refusal cannot leave a prefix resolving half a validator set. The
+door and the seat both refuse the hazard, and the door is the only one that can
+demand possession.
+
+Anything that needs a `Registry` says so through a `CanonicalSet` — including
+`conformance_test` (the Go corpus rows) and `bench_trilang`. A benchmark that
+reached past the door would be timing a shape production cannot build.
+
 **The validator identity is the 20-byte NodeID** — `lux::consensus::Node`, in
 `cert.hpp`, the identity a certificate's votes carry and the same 20 bytes the
 proof of possession binds. `registration.hpp` static-asserts it against
 `bls::kNodeLen` so the wire's spelling of that width and the proof preimage's
 cannot drift apart.
 
-> **Trap.** `lux::consensus::Node` (the 20-byte id, `cert.hpp`) and
-> `lux::consensus::Node` (the participant class, `node.hpp`) are two different
-> things under one name, so `cert.hpp` and `node.hpp` — and therefore
-> `registration.hpp` and `node.hpp` — cannot appear in one translation unit.
-> Pre-existing. The fix is to rename the participant: the 20-byte id is `Node` in
-> Rust and `ids.NodeID` in Go, so it keeps the name, and the class that runs the
-> protocol becomes `Party`.
+**The participant is a `Party`.** `lux::consensus::Node` (the 20-byte id,
+`cert.hpp`) and the participant class in `node.hpp` were both `Node`, so no
+translation unit could hold `cert.hpp` and `node.hpp` at once — and the admission
+door, whose whole vocabulary is that identity, could not be wired to the thing
+that runs consensus. The id keeps the name it has in Rust (`Node`) and Go
+(`ids.NodeID`); the participant is `Party`, the standard word for one.
+`test/party_test.cpp` holds both headers and takes registrations through
+`admit()` to a live mesh and a verified certificate.
+
+> **The FILE stays `node.hpp`.** `lux-cpp/node` and `lux-cpp/sdk` locate this
+> checkout by `find_checkout(... "include/lux/consensus/node.hpp" ...)`. Renaming
+> the type is a rename; renaming the path is a break. Those two repos DO name
+> `consensus::Node` (`node_host.hpp`/`.cpp`, `sdk/chain.hpp`,
+> `sdk/example/chain.cpp`, `node/test/*`) and must be updated to `Party` when this
+> lands.
 
 ## Layout
 
@@ -156,7 +200,7 @@ include/lux/consensus/quorum_cert_engine.hpp   the gate: rule, position, cert
 include/lux/consensus/registration.hpp the admission door: proof, uniqueness, weight
 include/lux/consensus/wave.hpp        FPC threshold voting + β confidence
 include/lux/consensus/photon.hpp      committee sampling (header-only)
-include/lux/consensus/node.hpp        one validator: poll, sign, disseminate
+include/lux/consensus/node.hpp        Party — one participant: poll, sign, send
 include/lux/consensus/zap/            votes over the ZAP wire codec
 include/lux/quasar.h                  the witness cgo ABI — a published contract
 include/lux/quasar.hpp                WitnessVerifier / WitnessAggregator

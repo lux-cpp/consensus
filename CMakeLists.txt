@@ -139,6 +139,7 @@ set(CONSENSUS_TESTS
   conformance          # the Go corpus: message bytes, DST, floors, thresholds
   pop_conformance      # the node-bound proof of possession, byte-for-byte vs Go & Rust
   registration         # the admission door: possession, one key one node, one node one key
+  party                # the door wired to the participant: one admission, gate + registry
   quasar_verify        # the witness verifier vs the Go fixtures, C++ AND C ABI
   quasar_witness)      # threshold-share aggregation on Go's (index || sig) wire form
 

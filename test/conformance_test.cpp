@@ -22,6 +22,7 @@
 #include "lux/consensus/bls.hpp"
 #include "lux/consensus/cert.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/registration.hpp"  // CanonicalSet — the one way a Registry is seated
 #include "lux/consensus/threshold.hpp"
 #include "lux/consensus/wave.hpp"
 
@@ -428,14 +429,24 @@ void cert_verify() {
         if (nodes.size() != n * kNodeLen || pks.size() != n * 48)
             die(name + ": the row's validator set is not " + std::to_string(n) + " entries wide");
 
-        Registry set;
+        // The row's validator set, seated the ONE way a set is seated — through
+        // the admitted set, because Registry has no other door. cert_verify names
+        // no weights (the predicate counts votes against a threshold, not stake),
+        // so each validator carries one unit: the smallest thing that is not a
+        // phantom signer, and the honest spelling of "this corpus says nothing
+        // about weight".
+        CanonicalSet row;
+        row.validators.reserve(n);
         for (std::size_t i = 0; i < n; ++i) {
             Node id{};
             PubKey pk{};
             std::copy_n(nodes.begin() + std::ptrdiff_t(i * kNodeLen), kNodeLen, id.begin());
             std::copy_n(pks.begin() + std::ptrdiff_t(i * 48), 48, pk.begin());
-            if (!set.insert(id, pk)) die(name + ": Go's public key " + std::to_string(i) + " did not register");
+            row.validators.push_back(CanonicalValidator{id, pk, 1});
         }
+        row.total_weight = n;
+        Registry set;
+        if (!row.install(set)) die(name + ": Go's validator set did not seat");
 
         const std::vector<std::uint8_t> wire = unhex(field(r, "wire"));
         Refusal why = Refusal::Wire;

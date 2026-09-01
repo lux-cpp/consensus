@@ -231,7 +231,21 @@ bool Registry::insert(const Node& node, const PubKey& compressed) {
     // refused at the boundary rather than carried to every later verification.
     if (blst_p1_affine_is_inf(&key->pk)) return false;
     if (!blst_p1_affine_in_g1(&key->pk)) return false;
-    keys_[node] = std::move(key);
+
+    // ONE KEY, ONE NODE — Go's ErrDuplicateKey. The hazard this closes is the
+    // reason the admission door was written: a holder seated under two node ids
+    // is two votes on one signature, and Cert::verify is right to count them,
+    // because it counts what the set told it. The set declines to say it.
+    if (seated_.contains(compressed)) return false;
+    // ONE NODE, ONE KEY — Go's ErrDuplicateNode, and the axis an overwriting
+    // seat used to hide: re-seating a node under a second key silently retired
+    // the first, so a certificate signed under the key this set was built around
+    // stopped verifying against it. Neither axis implies the other.
+    if (keys_.contains(node)) return false;
+
+    // Both indices move together or neither does; nothing above has written.
+    keys_.emplace(node, std::move(key));
+    seated_.insert(compressed);
     return true;
 }
 

@@ -13,7 +13,7 @@
 //       with ⌈n/3⌉ equivocators it becomes possible — so the bound is TIGHT and
 //       equals avalanche's f < n/3 (this is the documented BFT limit, not a bug).
 //
-//   [2] NODE / discipline      — an honest Node fed BOTH siblings to a β-confirmed
+//   [2] NODE / discipline      — an honest Party fed BOTH siblings to a β-confirmed
 //       ACCEPT signs EXACTLY ONE: the per-HEIGHT non-equivocation guard makes an
 //       honest validator's stake land in at most one quorum per height. This is the
 //       premise [1] relies on; without it [3] (and real safety) collapses.
@@ -32,7 +32,7 @@
 //       height stays signable (no liveness loss).
 //
 // Teeth (mutation-verified, see proofs/no_double_finalize.tex and the report):
-//   - delete the Node non-equivocation guard ⇒ [2] sees two broadcasts and [3]
+//   - delete the Party non-equivocation guard ⇒ [2] sees two broadcasts and [3]
 //     finalizes BOTH branches with only f=3 Byzantine (safety violated). RED.
 //   - key the slot per-block_id, or per-(height,epoch) instead of per-HEIGHT ⇒ [4a]
 //     signs both same-height siblings (a different-epoch sibling opens a second slot),
@@ -92,11 +92,11 @@ Signature sign_vote(const Key& key, const VotePosition& pos) {
 
 // In-process vote bus; counts broadcasts (used by [2] to observe equivocation).
 struct Bus : VoteTransport {
-    std::vector<Node*> subs;
+    std::vector<Party*> subs;
     std::vector<SignedVote> broadcasts;
     void broadcast(const SignedVote& v) override {
         broadcasts.push_back(v);
-        for (Node* n : subs) n->onVote(v);
+        for (Party* n : subs) n->onVote(v);
     }
 };
 
@@ -171,7 +171,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+        Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
         bus.subs.push_back(&node);
         const VotePosition B1 = make_pos(0xB1, 9, 1);
         const VotePosition B2 = make_pos(0xB2, 9, 1);  // sibling: same (height,epoch)
@@ -194,11 +194,11 @@ int main() {
     // ── [3] EMERGENT: 10 nodes, f=3 equivocators, single head on every honest node ─
     {
         const int b = g_fail;
-        // 7 honest Nodes (indices 3..9) on one bus; keys 0..2 are Byzantine (no Node).
+        // 7 honest Parties (indices 3..9) on one bus; keys 0..2 are Byzantine (no Party).
         Bus bus;
-        std::vector<std::unique_ptr<Node>> honest;
+        std::vector<std::unique_ptr<Party>> honest;
         for (std::uint32_t i = 3; i < kN; ++i)
-            honest.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
+            honest.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, kAlpha,
                                                     WaveConfig{5, 4, 4}, bus));
         for (auto& n : honest) bus.subs.push_back(n.get());
 
@@ -210,7 +210,7 @@ int main() {
         // guard forces each to commit ONE: nodes 3..6 reach B1 first (→B1), nodes
         // 7..9 reach B2 first (→B2). WITHOUT the guard each would vote BOTH.
         for (std::size_t idx = 0; idx < honest.size(); ++idx) {
-            Node* n = honest[idx].get();
+            Party* n = honest[idx].get();
             const bool prefersB1 = idx < 4;  // first 4 honest → B1, last 3 → B2
             const VotePosition& first  = prefersB1 ? B1 : B2;
             const VotePosition& second = prefersB1 ? B2 : B1;
@@ -220,7 +220,7 @@ int main() {
 
         // The 3 Byzantine validators equivocate: each injects a valid vote for BOTH
         // branches into every honest gate (this is what a real equivocator does —
-        // it does not run the honest Node, it just emits two signed votes).
+        // it does not run the honest Party, it just emits two signed votes).
         for (std::uint32_t b = 0; b < 3; ++b) {
             SignedVote v1{B1.block_id, keys[b].pk, sign_vote(keys[b], B1)};
             SignedVote v2{B2.block_id, keys[b].pk, sign_vote(keys[b], B2)};
@@ -260,7 +260,7 @@ int main() {
         // at one height, the fresh-net fatal.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+            Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition B1 = make_pos(0xB1, 9, 1);
             const VotePosition B2 = make_pos(0xB2, 9, 2);  // SAME height, DIFFERENT epoch
@@ -278,7 +278,7 @@ int main() {
         // durable decided-height gate. A higher OPEN height stays signable.
         {
             Bus bus;
-            Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+            Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition A    = make_pos(0xA1, 20, 1);  // the winner at height 20
             const VotePosition Bsib = make_pos(0xB2, 20, 2);  // losing sibling at 20 (diff id+epoch)
@@ -328,7 +328,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Node node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+        Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
         bus.subs.push_back(&node);
 
         const VotePosition at7 = make_pos(0xA1, 7, 1);

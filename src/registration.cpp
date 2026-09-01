@@ -39,8 +39,17 @@ std::vector<Validator> CanonicalSet::weights() const {
 bool CanonicalSet::install(Registry& keys) const {
     // No carryover: a registry that already holds a set is not this set.
     if (keys.size() != 0) return false;
+
+    // Seated whole or not at all, exactly as the set was admitted whole or not
+    // at all — and for the same reason. A midway refusal that left a PREFIX
+    // behind would leave a registry resolving some of this set's nodes and none
+    // of the rest, which is a validator set nobody chose: the floors are taken
+    // of a total this half-registry does not have. So it is built beside the
+    // caller's and moved in only once every seat is taken.
+    Registry seated;
     for (const CanonicalValidator& v : validators)
-        if (!keys.insert(v.node, v.key)) return false;
+        if (!seated.insert(v.node, v.key)) return false;
+    keys = std::move(seated);
     return true;
 }
 
@@ -100,7 +109,10 @@ Admission admit(std::vector<Registration> rs, CanonicalSet& set) {
         // The canonical spelling of the key, taken from the POINT and never from
         // the caller's bytes. One point, one encoding: a registrant does not get
         // to choose which 48 bytes the set carries, because the set is keyed on
-        // them and a second spelling of one key would be a second signer.
+        // them and a second spelling of one key would be a second signer. That
+        // the round trip LANDS on the caller's bytes is pop_verify's Key clause,
+        // where Go keeps it too, so the door reads the point rather than
+        // re-deciding what a canonical key is.
         blst_p1_affine point;
         if (blst_p1_uncompress(&point, r.key.data()) != BLST_SUCCESS)
             return Admission{.why        = Admission::Why::Possession,
@@ -108,14 +120,6 @@ Admission admit(std::vector<Registration> rs, CanonicalSet& set) {
                              .possession = bls::Pop::Key};  // unreachable: pop_verify decoded it
         PubKey canonical{};
         blst_p1_affine_compress(canonical.data(), &point);
-        // …and the round trip must land on the bytes that went into the proof's
-        // message, which is Go's pop.Verify clause made explicit at the door: the
-        // 68 bytes signed were the caller's spelling, so admitting the point under
-        // a different spelling would seat a key no proof was made for.
-        if (!std::equal(canonical.begin(), canonical.end(), r.key.begin()))
-            return Admission{.why        = Admission::Why::Possession,
-                             .node       = r.node,
-                             .possession = bls::Pop::Key};
 
         // UNIQUENESS OF KEY. Possession does NOT catch this: the holder of a key
         // can mint a genuine node-bound proof for any identity it likes, so every
