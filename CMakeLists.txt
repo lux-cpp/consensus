@@ -136,6 +136,7 @@ set(CONSENSUS_TESTS
   out_of_turn          # the acceptance window
   tier                 # the two finality rungs: Nova (accept) and Quasar (export)
   conformance          # the Go corpus: message bytes, DST, floors, thresholds
+  pop_conformance      # the node-bound proof of possession, byte-for-byte vs Go & Rust
   quasar_verify        # the witness verifier vs the Go fixtures, C++ AND C ABI
   quasar_witness)      # threshold-share aggregation on Go's (index || sig) wire form
 
@@ -168,6 +169,8 @@ endforeach()
 set(CONFORMANCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vectors" CACHE PATH
     "Directory holding the Go-generated conformance corpus")
 target_compile_definitions(conformance_test PRIVATE
+    CONSENSUS_VECTORS="${CONFORMANCE_DIR}")
+target_compile_definitions(pop_conformance_test PRIVATE
     CONSENSUS_VECTORS="${CONFORMANCE_DIR}")
 
 # Apply the requested sanitizer to consensus's OWN targets only (blst/bls stay
