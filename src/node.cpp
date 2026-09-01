@@ -7,19 +7,19 @@
 
 namespace lux::consensus {
 
-Node::Node(std::uint32_t index,
-           const std::array<std::uint8_t, 32> & sk,
-           const PubKey & pk,
-           std::vector<Validator> validator_set,
-           std::uint32_t alpha,
-           WaveConfig wave_cfg,
-           VoteTransport & tx)
+Party::Party(std::uint32_t index,
+             const std::array<std::uint8_t, 32> & sk,
+             const PubKey & pk,
+             std::vector<Validator> validator_set,
+             std::uint32_t alpha,
+             WaveConfig wave_cfg,
+             VoteTransport & tx)
     : index_(index), sk_(sk), pk_(pk),
       gate_(std::move(validator_set), alpha), wave_(wave_cfg), tx_(tx) {}
 
-void Node::submit(const VotePosition & pos) { gate_.submit(pos); }
+void Party::submit(const VotePosition & pos) { gate_.submit(pos); }
 
-Decision Node::poll(const BlockId & block, std::uint32_t yes, std::uint32_t total) {
+Decision Party::poll(const BlockId & block, std::uint32_t yes, std::uint32_t total) {
     // The AUTHORITATIVE position: what submit() registered for this block id. A
     // caller supplies the id only, so it cannot steer this node to sign at a
     // height the vote was never cast at.
@@ -76,7 +76,7 @@ Decision Node::poll(const BlockId & block, std::uint32_t yes, std::uint32_t tota
     return d;
 }
 
-void Node::mark_finalized_through(std::uint64_t height) {
+void Party::mark_finalized_through(std::uint64_t height) {
     // Monotonic: a stale/lower frontier never regresses the decided frontier.
     if (final_through_ && height <= *final_through_) return;
     final_through_ = height;
@@ -90,7 +90,7 @@ void Node::mark_finalized_through(std::uint64_t height) {
     }
 }
 
-VoteResult Node::onVote(const SignedVote & v) {
+VoteResult Party::onVote(const SignedVote & v) {
     return gate_.record_vote(v.block_id, v.voter, v.sig);
 }
 

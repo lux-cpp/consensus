@@ -6,7 +6,7 @@
 // single proposer to wait on — any α distinct voters carrying > 2/3 stake finalize
 // — so a down or actively-misbehaving validator is ROUTED AROUND, never blocks
 // progress, and the system self-heals without a manual restart. Proved in-process
-// with the REAL Node + QuorumCertEngine (the over-the-wire companion is node2's
+// with the REAL Party + QuorumCertEngine (the over-the-wire companion is node2's
 // node2_liveness_test):
 //
 //   [1] DOWN validators — f = ⌊(n-1)/3⌋ = 3 of 10 silent (never join, never vote):
@@ -71,8 +71,8 @@ Signature sign_vote(const Key& key, const VotePosition& pos) {
     return sig;
 }
 struct Bus : VoteTransport {
-    std::vector<Node*> subs;
-    void broadcast(const SignedVote& v) override { for (Node* n : subs) n->onVote(v); }
+    std::vector<Party*> subs;
+    void broadcast(const SignedVote& v) override { for (Party* n : subs) n->onVote(v); }
 };
 
 }  // namespace
@@ -88,12 +88,12 @@ int main() {
     std::vector<Validator> set;
     for (const auto& k : keys) set.push_back({k.pk, kStake});
 
-    // Build `live` Node instances (the first `live` validator indices) on one bus;
+    // Build `live` Party instances (the first `live` validator indices) on one bus;
     // the rest are DOWN (absent — not subscribed, never poll). Returns the nodes.
-    auto run_height = [&](std::vector<std::unique_ptr<Node>>& nodes, Bus& bus,
+    auto run_height = [&](std::vector<std::unique_ptr<Party>>& nodes, Bus& bus,
                           std::uint32_t live, const VotePosition& pos) {
         for (std::uint32_t i = 0; i < live; ++i)
-            nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, kAlpha,
+            nodes.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, kAlpha,
                                                    WaveConfig{5, 4, 4}, bus));
         for (auto& n : nodes) bus.subs.push_back(n.get());
         for (auto& n : nodes) n->submit(pos);
@@ -104,7 +104,7 @@ int main() {
     {
         const int b = g_fail;
         // 3 of 10 down → 7 live (70 stake) finalize.
-        Bus bus; std::vector<std::unique_ptr<Node>> nodes;
+        Bus bus; std::vector<std::unique_ptr<Party>> nodes;
         const VotePosition pos = make_pos(0x71, 100, 1);
         run_height(nodes, bus, /*live=*/7, pos);
         bool all_final = true, all_verify = true;
@@ -117,7 +117,7 @@ int main() {
         check(all_verify, "the 7-of-10 cert verifies with 70 stake (the 3 down are routed around)");
 
         // 4 of 10 down → only 6 live (60 ≤ 66) → NOTHING finalizes (safe stall).
-        Bus bus2; std::vector<std::unique_ptr<Node>> nodes2;
+        Bus bus2; std::vector<std::unique_ptr<Party>> nodes2;
         const VotePosition pos2 = make_pos(0x72, 101, 1);
         run_height(nodes2, bus2, /*live=*/6, pos2);
         bool any_final = false;
@@ -132,7 +132,7 @@ int main() {
         const int b = g_fail;
         // 7 honest live (indices 0..6). Validator 7 is WEDGED-present: in the set,
         // "gossiping", but only emits garbage. Validators 8,9 are down.
-        Bus bus; std::vector<std::unique_ptr<Node>> nodes;
+        Bus bus; std::vector<std::unique_ptr<Party>> nodes;
         const VotePosition real = make_pos(0x73, 102, 1);
         run_height(nodes, bus, /*live=*/7, real);
 
@@ -164,7 +164,7 @@ int main() {
         const int b = g_fail;
         bool healed = true;
         for (std::uint64_t h = 200; h < 203; ++h) {
-            Bus bus; std::vector<std::unique_ptr<Node>> nodes;
+            Bus bus; std::vector<std::unique_ptr<Party>> nodes;
             const VotePosition pos = make_pos(std::uint8_t(0x80 + (h - 200)), h, 1);
             run_height(nodes, bus, /*live=*/7, pos);  // same 3 perpetually down
             for (auto& n : nodes) {

@@ -1,11 +1,26 @@
 // Copyright (C) 2026, Lux Industries, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
-// node.hpp — one validator's view of consensus. A Node runs the liveness poll
+// node.hpp — one validator's view of consensus. A Party runs the liveness poll
 // (wave) and the safety gate (QuorumCertEngine) over the full validator set,
 // signs its own ACCEPT votes, and disseminates them through a VoteTransport.
-// Independent honest nodes, each assembling from the votes they receive, converge
-// on the SAME quorum certificate — that convergence is leaderless finality.
+// Independent honest parties, each assembling from the votes they receive,
+// converge on the SAME quorum certificate — that convergence is leaderless
+// finality.
+//
+// THE PARTICIPANT IS A Party AND THE IDENTITY IS A Node. They are two things and
+// they used to share one name: cert.hpp names the twenty bytes a certificate
+// carries `Node`, matching Rust's Node and Go's ids.NodeID, and this file named
+// the running participant the same. Both live in lux::consensus, so a translation
+// unit that included both headers did not compile — which meant the admission
+// door, whose whole vocabulary is the twenty-byte identity, could not be wired to
+// the thing that runs consensus. A door nobody can reach is not a door. `Party`
+// is the standard word for a participant in a protocol, the identity keeps the
+// name its two oracles use, and test/party_test.cpp holds both headers at once.
+//
+// THE FILE IS STILL node.hpp because the path is published: lux-cpp/node and
+// lux-cpp/sdk find this checkout by looking for include/lux/consensus/node.hpp.
+// Renaming the type is a rename; renaming the path is a break.
 //
 // The VoteTransport is the seam between consensus and the network: the in-process
 // test harness implements it as a bus; a ZAP gossip layer implements it for a
@@ -39,15 +54,18 @@ struct VoteTransport {
     virtual void broadcast(const SignedVote & vote) = 0;
 };
 
-class Node {
+// One participant: its key, its poll, its gate, and the one vote it will cast
+// per height. `validator_set` is the weighted set it decides over — in production
+// CanonicalSet::weights(), so the keys it counts are keys the door proved.
+class Party {
 public:
-    Node(std::uint32_t index,
-         const std::array<std::uint8_t, 32> & sk,
-         const PubKey & pk,
-         std::vector<Validator> validator_set,
-         std::uint32_t alpha,
-         WaveConfig wave_cfg,
-         VoteTransport & tx);
+    Party(std::uint32_t index,
+          const std::array<std::uint8_t, 32> & sk,
+          const PubKey & pk,
+          std::vector<Validator> validator_set,
+          std::uint32_t alpha,
+          WaveConfig wave_cfg,
+          VoteTransport & tx);
 
     // Register a block this node will participate in deciding. The position
     // registered here is the ONE this node will ever sign for that block id.
@@ -82,7 +100,7 @@ public:
     // faithful mirror of the Go engine fix (prune strictly below + decided-height gate).
     //
     // DURABILITY IS THE EMBEDDER'S JOB. final_through_ is IN-MEMORY; this pure-library
-    // Node has no persistence layer. To survive a restart, the embedder (node2) MUST, on
+    // Party has no persistence layer. To survive a restart, the embedder (node2) MUST, on
     // boot, call mark_finalized_through with its OWN persisted decided height BEFORE the
     // node signs anything — otherwise a decided-below-tip height whose slot was GC'd would
     // be re-signable across the restart (the cross-restart prune-then-resign fork). The Go

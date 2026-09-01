@@ -36,6 +36,7 @@
 #include "lux/consensus/bls.hpp"
 #include "lux/consensus/cert.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/registration.hpp"  // CanonicalSet — the one way a Registry is seated
 
 #include <benchmark/benchmark.h>
 
@@ -189,12 +190,19 @@ Portable portable(std::size_t n) {
     p.cert.tier      = Tier::Quasar;
     p.cert.position  = p.c.pos;
     p.cert.threshold = std::uint32_t(n);
+    // The committee's set, seated through the admitted set — Registry has no
+    // other door, and a benchmark that reached past it would be timing a shape
+    // production cannot build. Equal stake, one unit each.
+    CanonicalSet admitted;
+    admitted.validators.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
         Node id{};
         be64(id.data(), std::uint64_t(i) + 1);
-        if (!p.set.insert(id, p.c.pks[i])) throw std::runtime_error("registry insert");
+        admitted.validators.push_back(CanonicalValidator{id, p.c.pks[i], 1});
         p.cert.votes.push_back(Vote{id, true, std::vector<std::uint8_t>(p.c.sigs[i].begin(), p.c.sigs[i].end())});
     }
+    admitted.total_weight = n;
+    if (!admitted.install(p.set)) throw std::runtime_error("registry seat");
     p.wire = p.cert.encode();
     // A benchmark of a predicate that refuses measures the refusal path.
     if (p.cert.verify(p.set) != Refusal::None) throw std::runtime_error("committee does not verify");
