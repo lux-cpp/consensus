@@ -13,8 +13,21 @@
 // require many DISTINCT signers was cleared by one. The proof primitive to close
 // that has been here since bls::pop_verify; this is the place that demands it.
 //
-// THE ORDER IS THE RULE, and it is not decoration:
+// The demand is made TWICE, on purpose. admit() is the door, and it is where a
+// registration must show possession — no other layer can ask for that. But the
+// hazard itself is a property of the seating, so Registry holds the uniqueness
+// half of the rule too, and its seat is private to this file's install(). A door
+// standing next to an open wall is not a door.
 //
+// THE ORDER IS THE RULE, and it is not decoration. It is written here as the
+// code runs it, which is as Go runs it:
+//
+//   KEY          a registration with no key at all cannot sign, so it cannot be
+//                admitted through the proof path — a distinct answer from a key
+//                that is present and wrong.
+//   ZERO WEIGHT  before the pairing, because it is free and the pairing is not,
+//                and because a phantom signer is refused whatever its proof says.
+//                Go checks r.Weight == 0 ahead of pop.Verify for the same reason.
 //   ENCODING     the key is a canonical compressed BLS12-381 G1 point, and the
 //                proof a canonical compressed G2 one. A pairing on bytes that
 //                are not a point is undefined, so nothing is admitted — and no
@@ -32,14 +45,35 @@
 //   WEIGHT       counted last. Weight counted before uniqueness is weight
 //                counted twice.
 //
+// ENCODING and POSSESSION are one call — bls::pop_verify — which is where Go
+// keeps them too, so the two implementations refuse the same bytes at the same
+// leg. The remaining clauses are set-level and belong to nobody else.
+//
 // THE SET IS ADMITTED WHOLE OR NOT AT ALL. One unproven or duplicated
 // registration fails the call rather than being dropped from an otherwise-good
 // set: a set that silently loses a signer is a set whose total weight no longer
 // describes it, and the stake floors are computed from that total.
 //
-// A refusal is a function of the SET, never of the order a caller happened to
-// build a vector in — the registrations are walked in node-id order, so two
-// nodes given the same set refuse the same registration for the same reason.
+// THE VERDICT AND THE ADMITTED SET ARE FUNCTIONS OF THE SET, never of the order
+// a caller happened to build a vector in: two nodes handed the same
+// registrations agree on whether they are admitted, and — when they are — on the
+// exact bytes and order of the set that comes out. That is the property
+// consensus needs, and it holds unconditionally.
+//
+// THE REFUSAL REASON IS THAT STRONG ONLY FOR SETS OF DISTINCT NODE IDS. The
+// registrations are walked in node-id order by a STABLE sort, which is total
+// when the ids are distinct; two entries sharing a node id it cannot separate,
+// so their input order survives into the walk and can decide WHICH clause
+// answers. Every per-registration clause answers for its own entry, so a pair
+// that shares a node id and is faulty at two DIFFERENT clauses — one staking
+// nothing, one carrying a proof minted elsewhere — is refused as zero weight or
+// as possession according to which was written first. Both orders refuse, and
+// neither returns a set; they name a different fault for it.
+//
+// Go does exactly the same thing (slices.SortStableFunc over the node id), so
+// this is parity and not drift, and a sort made total by tie-breaking on the key
+// would BREAK that parity to buy a reason nobody consumes: a set with a repeated
+// node id is refused either way, and the two implementations agree on that.
 
 #pragma once
 
@@ -112,17 +146,25 @@ struct CanonicalSet {
 
     // Seat every admitted validator in a Registry, so a gossiped certificate is
     // checked against the set that was admitted and not one assembled by hand.
+    // This is the ONE seating route: Registry::insert is private and this is its
+    // only friend, so a caller has no hand to assemble one with.
     //
     // `keys` MUST BE EMPTY, and false is the refusal when it is not. A set
     // rotation seats a fresh Registry exactly as it constructs a fresh engine:
     // seating over a live one would leave the PREVIOUS set's nodes resolvable, so
     // a retired validator's vote would still find a key and "an unknown voter is
-    // a refusal" would quietly become "a retired voter is counted". That is the
-    // one way this set reaches the certificate verifier, so it is the one place
-    // the carryover has to be impossible rather than merely discouraged.
+    // a refusal" would quietly become "a retired voter is counted".
     //
-    // A key admission already proved decodes cannot be refused by insert(), so
-    // beyond the emptiness clause false is the invariant failing loud.
+    // AND THE HAZARD IS REFUSED AT THE SEAT AS WELL AS AT THE DOOR. This struct
+    // is a plain aggregate — anyone can write down two validators sharing a key
+    // without going through admit() — so the door alone would be a door beside an
+    // open wall. Registry::insert refuses a key already seated under another node
+    // and a node already seated, which is the same rule admit() enforces, held by
+    // the object that would suffer the lie. A forged set therefore seats NOTHING:
+    // the refusal is total (see above), not a prefix.
+    //
+    // Beyond those clauses false is the invariant failing loud: a key admission
+    // already proved decodes cannot be refused for its encoding.
     [[nodiscard]] bool install(Registry& keys) const;
 };
 

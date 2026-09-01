@@ -48,6 +48,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace lux::consensus {
@@ -129,19 +130,31 @@ struct Cert {
     [[nodiscard]] Refusal verify(const Keys& keys) const;
 };
 
+// The admitted set — registration.hpp. Seating a Registry is its business, and
+// only its business; the name is here so it can be said so below.
+struct CanonicalSet;
+
 // A validator set that resolves node ids to DECOMPRESSED public keys.
 //
 // The key is uncompressed and subgroup-checked ONCE, here, at registration —
 // so a verification pays for the signature it is checking and not for a key it
 // already trusts. This is the work split Go's verifier makes, and it is the
 // split that makes a per-verify figure comparable across the three languages.
+//
+// IT IS A BIJECTION, and that is what makes counting votes mean anything. A
+// certificate is verified by counting one vote per DISTINCT node id against the
+// floor; if two node ids resolved to one key, one holder's single signature would clear
+// a floor written to require two signers, and no clause of the verifier could
+// tell — it was handed a set that says two nodes signed. So the set itself
+// refuses to be that: one node resolves to one key, one key answers for one
+// node, and neither direction implies the other.
+//
+// THE ONE WAY IN IS CanonicalSet::install. Seating is private and the admitted
+// set is its only friend, so every live Registry came through the admission door
+// — where possession was demanded — rather than out of a caller's own idea of
+// who the validators are.
 class Registry : public Keys {
 public:
-    // Register a validator's compressed public key. Refuses a wrong length, a
-    // point that does not uncompress, one outside the subgroup, and the
-    // identity — an identity public key verifies a signature over any message.
-    bool insert(const Node& node, const PubKey& compressed);
-
     [[nodiscard]] bool verify(const Node& node,
                               const std::uint8_t* message, std::size_t message_len,
                               const std::uint8_t* signature, std::size_t signature_len) const override;
@@ -149,8 +162,20 @@ public:
     [[nodiscard]] std::size_t size() const noexcept { return keys_.size(); }
 
 private:
+    // Seat one validator under its compressed public key. Refuses a point that
+    // does not uncompress, one outside the subgroup, and the identity — an
+    // identity public key verifies a signature over any message. Then the two
+    // uniqueness axes, in Go's order (ErrDuplicateKey, then ErrDuplicateNode):
+    // a key already seated under another node, and a node already seated. A
+    // refusal seats nothing.
+    bool insert(const Node& node, const PubKey& compressed);
+
+    // install() is the seating route, so it is the one thing that may call it.
+    friend struct CanonicalSet;
+
     struct Key;                                  // a decompressed G1 affine
     std::map<Node, std::shared_ptr<const Key>> keys_;
+    std::set<PubKey>                           seated_;  // the keys already spoken for
 };
 
 }  // namespace lux::consensus

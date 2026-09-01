@@ -95,6 +95,12 @@ enum class Pop { Ok = 0, Key, Proof, Possession };
 // canonical, in-subgroup, non-identity point; a proof that decodes but does not
 // bind this node to this key is Possession. Byte-for-byte the Go validator/pop
 // and the Rust lux_consensus::pop.
+//
+// ONE POINT, ONE ENCODING is part of the Key leg, not of any caller: `pk` must
+// be the canonical spelling of the point it decodes to. The 68 bytes signed are
+// the caller's 48, so a second spelling admitted here would be a key no proof
+// was made for — and the next caller of this function would have to remember
+// that, which is a rule that gets forgotten. It lives with the decode.
 Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
                const std::uint8_t proof[96]) noexcept;
 

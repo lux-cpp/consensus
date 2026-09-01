@@ -7,11 +7,12 @@
 // The properties under test are the ones a door can get wrong, and the first one
 // is the reason the door exists at all:
 //
-//   0. THE HAZARD IS REAL. Two node ids resolving to ONE key clear a two-signer
-//      floor on ONE holder's signature. That set is buildable by hand today —
-//      Registry::insert takes whatever pairs it is given — and the certificate
-//      verifier is right to accept it, because the set it was handed says two
-//      nodes signed. Nothing downstream can catch this; only the door can.
+//   0. THE HAZARD IS REAL, AND IT IS NOW UNBUILDABLE. Two node ids resolving to
+//      ONE key clear a two-signer floor on ONE holder's signature, and the
+//      certificate verifier is RIGHT to accept it: it counts what the set it was
+//      handed says, and that set says two nodes signed. Nothing downstream can
+//      catch it. So the catch is upstream and it is doubled — admit() refuses to
+//      build the set, and Registry refuses to seat it however it was built.
 //   1. POSSESSION IS REQUIRED. No proof, a wrong-width proof, a proof lifted from
 //      another node, and the IETF pubkey-only proof are each refused.
 //   2. ONE KEY, ONE NODE. Both registrations are individually SOUND — the holder
@@ -142,6 +143,40 @@ void refuses(const std::vector<Registration>& rs, Admission::Why want, const std
           "  …and a refused call returns no partial set");
 }
 
+// A key resolver that answers for SEVERAL node ids with ONE holder's key: the
+// set the door exists to keep out of the world. It is a Keys, not a Registry,
+// precisely because a Registry can no longer be one — and the hazard has to stay
+// demonstrable, or the reason for the lock stops being visible.
+struct OneHolder : Keys {
+    OneHolder(const PubKey& k, std::vector<Node> ns) : key(k), names(std::move(ns)) {}
+
+    PubKey            key{};
+    std::vector<Node> names;
+
+    [[nodiscard]] bool verify(const Node& node,
+                              const std::uint8_t* message, std::size_t message_len,
+                              const std::uint8_t* signature,
+                              std::size_t signature_len) const override {
+        if (std::find(names.begin(), names.end(), node) == names.end()) return false;
+        if (signature_len != 96) return false;
+        return bls::verify(key.data(), message, message_len, signature) == 0;
+    }
+};
+
+// Can a registry be seated by hand? The question is asked of a TEMPLATE
+// parameter on purpose: an access failure during substitution is a false
+// concept, where the same expression written against Registry directly is a hard
+// error — which is the truth being asserted, but not in a form a test can hold.
+template <class R>
+concept Seatable = requires(R& r, const Node& n, const PubKey& k) { r.insert(n, k); };
+
+// The same seat, left open — so the detector is known to DISCRIMINATE and the
+// assertion about Registry is not a question that always answers no.
+struct OpenSeat {
+    bool insert(const Node&, const PubKey&) { return true; }
+};
+static_assert(Seatable<OpenSeat>, "the detector must see a seat that is reachable");
+
 VotePosition make_pos(std::uint8_t tag) {
     VotePosition p{};
     p.block_id.fill(tag);
@@ -159,16 +194,12 @@ int main() {
     std::printf("================================================================================\n");
 
     // ── 0. The hazard the door exists to close ───────────────────────────────
-    // One holder, two identities. The registry is built by hand, exactly as any
-    // caller could build it before there was a door.
+    // One holder, two identities — shown to be genuinely dangerous, and then
+    // shown to be unreachable by every route into a live Registry.
     {
         std::printf("\n[0] the hazard: two node ids, one key, one signature, a two-signer floor\n");
         const Key  holder = make_key(0x91);
         const Node one = make_node(0x10), two = make_node(0x20);
-
-        Registry keys;
-        check(keys.insert(one, holder.pk) && keys.insert(two, holder.pk),
-              "a registry accepts one key under two node ids — nothing downstream refuses it");
 
         const VotePosition              pos = make_pos(0x33);
         const std::vector<std::uint8_t> msg = canonical_vote_message(pos, true);
@@ -180,12 +211,49 @@ int main() {
         c.threshold = 2;
         c.votes     = {Vote{one, true, {sig.begin(), sig.end()}},
                        Vote{two, true, {sig.begin(), sig.end()}}};
-        check(c.verify(keys) == Refusal::None,
-              "…and a two-signer certificate VERIFIES on one holder's single signature");
 
-        // The same two claims at the door. Both proofs are genuine — the holder
-        // can prove possession for any identity it likes — and the set is still
-        // refused, because uniqueness is a property of the set, not of a pair.
+        // THE HAZARD, on a set that says what a hand-built registry used to be
+        // able to say. The verifier is not at fault here and this is not a
+        // finding against it: it resolved both names, checked a real signature
+        // under each, and counted two. The lie is in the set.
+        OneHolder hazard{holder.pk, {one, two}};
+        check(c.verify(hazard) == Refusal::None,
+              "a set answering for two node ids with one key clears a two-signer floor "
+              "on ONE signature");
+
+        // ROUTE 1 — the seat itself. There is no hand to build that registry
+        // with: seating is private and CanonicalSet::install is its only friend,
+        // so the call below is not a refusal at run time, it is not a program.
+        static_assert(!Seatable<Registry>,
+                      "Registry::insert must be private — install() is the one seating route");
+        check(Seatable<OpenSeat> && !Seatable<Registry>,
+              "no caller can seat a Registry by hand — insert is private to install()");
+
+        // ROUTE 2 — a canonical set written down by hand. CanonicalSet is a plain
+        // aggregate, so this compiles and admit() never saw it; the seat holds
+        // the uniqueness rule anyway, and holds it WHOLE.
+        CanonicalSet forged;
+        forged.validators = {CanonicalValidator{one, holder.pk, 1},
+                             CanonicalValidator{two, holder.pk, 1}};
+        forged.total_weight = 2;
+        Registry keys;
+        check(!forged.install(keys), "a forged set — two node ids, one key — seats nothing");
+        check(keys.size() == 0, "…and the registry it was offered is still empty");
+
+        // The other axis, forged the same way: one node id under two keys is two
+        // signer indices and two shares of the weight under one identity.
+        const Key       second = make_key(0x92);
+        CanonicalSet    twins;
+        twins.validators   = {CanonicalValidator{one, holder.pk, 1},
+                              CanonicalValidator{one, second.pk, 1}};
+        twins.total_weight = 2;
+        Registry twin_keys;
+        check(!twins.install(twin_keys), "a forged set — one node id, two keys — seats nothing");
+        check(twin_keys.size() == 0, "…and that registry is still empty too");
+
+        // ROUTE 3 — the door. Both proofs are genuine, because the holder can
+        // prove possession for any identity it likes, and the set is refused
+        // anyway: uniqueness is a property of the set, not of a pair.
         CanonicalSet set;
         const Admission a = admit({reg(holder, one, 1), reg(holder, two, 1)}, set);
         check(a.why == Admission::Why::DuplicateKey, "the door refuses to build that set");
@@ -349,9 +417,13 @@ int main() {
         check(refused, "…and the gate refuses to be constructed over it");
     }
 
-    // ── 6. The verdict is a function of the set ──────────────────────────────
+    // ── 6. What is, and is not, a function of the set ────────────────────────
+    // The stable sort is TOTAL when the node ids are distinct, and only then. Two
+    // registrations sharing a node id it cannot separate, so their input order
+    // survives into the walk — which is exactly Go's behaviour (SortStableFunc),
+    // and the reason the header's claim is scoped rather than absolute.
     {
-        std::printf("\n[6] the refusal does not move with the caller's vector order\n");
+        std::printf("\n[6] the set decides the verdict; the order can decide the wording\n");
         const Key       k = make_key(15);
         const Node      one = make_node(0x70), two = make_node(0x71);
         const Registration a = reg(k, one, 1), b = reg(k, two, 1);
@@ -361,9 +433,44 @@ int main() {
         const Admission backward = admit({b, a}, s2);
         check(forward.why == backward.why && forward.node == backward.node &&
                   forward.holder == backward.holder,
-              "forward and backward refuse the same registration for the same reason");
+              "distinct node ids: forward and backward refuse the same registration "
+              "for the same reason");
         check(forward.node == two && forward.holder == one,
               "…and it is the higher node id that is refused, on both");
+
+        // A REPEATED NODE ID — the one input the sort cannot order. Both entries
+        // claim node 0x72 and both are faulty, at DIFFERENT clauses: one stakes
+        // nothing, the other carries a proof minted for another node. Every
+        // per-registration clause answers for its own entry, so whichever is
+        // walked first is the one that answers, and the sort will not choose.
+        {
+            const Key  h = make_key(16), g = make_key(17);
+            const Node twin = make_node(0x72), elsewhere = make_node(0x73);
+            const Registration weightless = reg(h, twin, 0);
+            Registration       unproven   = reg(g, twin, 1);
+            unproven.proof                = mint(g, elsewhere);  // genuine, for another node
+
+            CanonicalSet    t1, t2;
+            const Admission first  = admit({weightless, unproven}, t1);
+            const Admission second = admit({unproven, weightless}, t2);
+
+            // THE PROPERTY THAT HOLDS, and the only one consensus needs: the
+            // decision is the set's, and a refusal carries no set either way.
+            check(!first && !second, "a repeated node id is refused whichever order it arrives in");
+            check(t1.validators.empty() && t1.total_weight == 0 &&
+                      t2.validators.empty() && t2.total_weight == 0,
+                  "…and neither refusal leaves a partial set behind");
+
+            // THE PROPERTY THAT DOES NOT, pinned so a "fix" that made the sort
+            // total would fail here rather than diverge from Go in silence: both
+            // refusals name node 0x72, and which fault they name follows the
+            // order the caller happened to write.
+            check(first.node == twin && second.node == twin,
+                  "…both name the node they share");
+            check(first.why == Admission::Why::ZeroWeight &&
+                      second.why == Admission::Why::Possession,
+                  "…while WHICH clause answers follows the order, exactly as it does in Go");
+        }
 
         // A good set admits to the same bytes in the same order whatever order it
         // arrived in: the canonical order is a property of the set.
@@ -414,9 +521,25 @@ int main() {
         // …and it is the ONLY set in there. Seating over a live registry would
         // leave a retired validator's node resolvable, so it is refused.
         check(!set.install(keys), "a second set refuses to seat over a live registry");
+        CanonicalSet other;
+        other.validators   = {CanonicalValidator{make_node(0xF1), ks[0].pk, 1}};
+        other.total_weight = 1;
         Registry stale;
-        check(stale.insert(make_node(0xF1), ks[0].pk), "a hand-seated registry");
+        check(other.install(stale), "a registry seated from some other set");
         check(!set.install(stale), "…and an admitted set will not be added to it");
+
+        // A SEAT THAT FAILS MIDWAY LEAVES NOTHING. The refusal is total for the
+        // same reason admission is: a registry holding a PREFIX of a set resolves
+        // some of its nodes and none of the rest, which is a validator set nobody
+        // chose and whose total the floors were never taken of.
+        CanonicalSet doomed;
+        doomed.validators   = {CanonicalValidator{make_node(0xE1), ks[0].pk, 1},
+                               CanonicalValidator{make_node(0xE2), ks[1].pk, 1},
+                               CanonicalValidator{make_node(0xE3), ks[0].pk, 1}};
+        doomed.total_weight = 3;
+        Registry partial;
+        check(!doomed.install(partial), "a set that repeats a key on its third seat is refused");
+        check(partial.size() == 0, "…and leaves the registry EMPTY, not holding the two good seats");
 
         Cert c;
         c.position  = pos;
