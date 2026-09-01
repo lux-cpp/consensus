@@ -4,7 +4,7 @@
 // zap_vote_transport.hpp — a VoteTransport that disseminates consensus votes as
 // ZAP frames over a real byte channel (a socket fd), using the canonical ZAP
 // codec (luxcpp/zap-cpp-core). This is the concrete realization of the seam
-// Node depends on: in production it carries votes across the validator mesh; the
+// Party depends on: in production it carries votes across the validator mesh; the
 // in-process Bus in the unit test is the same interface without the network.
 //
 // `broadcast` delivers a vote to co-located nodes AND writes it to the peer fd.
@@ -26,14 +26,14 @@ class ZapVoteTransport : public VoteTransport {
 public:
     // `peer_fd` is one end of a connected stream socket; `local` are nodes hosted
     // on this side that should also see locally-originated and inbound votes.
-    explicit ZapVoteTransport(int peer_fd, std::vector<Node *> local = {}) : fd_(peer_fd), local_(std::move(local)) {}
+    explicit ZapVoteTransport(int peer_fd, std::vector<Party *> local = {}) : fd_(peer_fd), local_(std::move(local)) {}
 
     // Register a co-located node (resolves the node↔transport construction cycle:
     // build the transport, construct nodes with its reference, then add them here).
-    void add_local(Node * n) { local_.push_back(n); }
+    void add_local(Party * n) { local_.push_back(n); }
 
     void broadcast(const SignedVote & v) override {
-        for (Node * n : local_)
+        for (Party * n : local_)
             n->onVote(v);  // co-located delivery
         const std::vector<std::uint8_t> payload = encode_vote(v);
         lux::zap::write_frame_locked(fd_, wmu_, kVoteMsgType, payload.data(), payload.size());  // to the peer
@@ -51,7 +51,7 @@ public:
         auto v = decode_vote(payload);
         if (!v)
             return false;
-        for (Node * n : local_)
+        for (Party * n : local_)
             n->onVote(*v);
         return true;
     }
@@ -59,7 +59,7 @@ public:
 private:
     int fd_;
     std::mutex wmu_;
-    std::vector<Node *> local_;
+    std::vector<Party *> local_;
 };
 
 }  // namespace lux::consensus::zap

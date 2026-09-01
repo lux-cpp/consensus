@@ -129,6 +129,16 @@ Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
     if (blst_p1_uncompress(&pk_aff, pk) != BLST_SUCCESS) return Pop::Key;
     if (!blst_p1_affine_in_g1(&pk_aff)) return Pop::Key;
     if (blst_p1_affine_is_inf(&pk_aff)) return Pop::Key;
+    // One point, one encoding. A decoder that accepted a second spelling of the
+    // same key would let a registrant choose which 48 bytes the message carries,
+    // and the proof is over the caller's bytes. Go checks this at the same leg,
+    // between decoding the key and decoding the proof, so a key that decodes but
+    // does not round-trip is Key on both sides and not Proof on one of them.
+    // blst refuses a non-canonical x on the way in, so this is a wall behind a
+    // wall — which is where it belongs, and not at one caller's discretion.
+    std::uint8_t round_trip[48];
+    blst_p1_affine_compress(round_trip, &pk_aff);
+    if (std::memcmp(round_trip, pk, sizeof(round_trip)) != 0) return Pop::Key;
 
     // ENCODING of the proof: canonical compressed G2, in-subgroup, non-identity.
     blst_p2_affine sig_aff;

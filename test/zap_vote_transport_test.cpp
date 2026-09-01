@@ -85,11 +85,11 @@ int main() {
         zap::ZapVoteTransport txA(fd[0]);
         zap::ZapVoteTransport txB(fd[1]);
 
-        std::vector<std::unique_ptr<Node>> A, B;
+        std::vector<std::unique_ptr<Party>> A, B;
         for (std::uint32_t i = 0; i < 3; ++i)  // group A: validators 0,1,2
-            A.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 4, 4}, txA));
+            A.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 4, 4}, txA));
         for (std::uint32_t i = 3; i < 5; ++i)  // group B: validators 3,4
-            B.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 4, 4}, txB));
+            B.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, 4, WaveConfig{5, 4, 4}, txB));
         for (auto & n : A) txA.add_local(n.get());
         for (auto & n : B) txB.add_local(n.get());
 

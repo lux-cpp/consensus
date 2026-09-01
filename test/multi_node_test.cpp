@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause-Eco
 //
 // multi_node_test.cpp — proves consensus is a genuine DISTRIBUTED protocol, not
-// a single vote-counter: N independent Node instances, each with its own BLS key,
+// a single vote-counter: N independent Party instances, each with its own BLS key,
 // each running the engine over the shared validator set, exchange signed votes
 // through a VoteTransport and INDEPENDENTLY converge on the same quorum
 // certificate. Includes a Byzantine validator and a sub-supermajority case.
@@ -41,9 +41,9 @@ Key make_key(std::uint8_t tag) {
 // fans every broadcast out to a set of subscriber nodes (delivery to honest nodes
 // only; a partitioned/Byzantine node simply is not subscribed for that vote).
 struct Bus : VoteTransport {
-    std::vector<Node *> subs;
+    std::vector<Party *> subs;
     void broadcast(const SignedVote & v) override {
-        for (Node * n : subs) n->onVote(v);
+        for (Party * n : subs) n->onVote(v);
     }
 };
 
@@ -65,9 +65,9 @@ int main() {
     std::vector<Validator> set;
     for (const auto & k : keys) set.push_back({k.pk, 20});  // total 100, α=4, floor=66
 
-    auto make_nodes = [&](Bus & bus, std::vector<std::unique_ptr<Node>> & nodes) {
+    auto make_nodes = [&](Bus & bus, std::vector<std::unique_ptr<Party>> & nodes) {
         for (std::uint32_t i = 0; i < 5; ++i)
-            nodes.push_back(std::make_unique<Node>(i, keys[i].sk, keys[i].pk, set, /*alpha=*/4,
+            nodes.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, /*alpha=*/4,
                                                    WaveConfig{5, 4, 4}, bus));
         for (auto & n : nodes) bus.subs.push_back(n.get());
     };
@@ -75,7 +75,7 @@ int main() {
     // ── [1] all 5 honest: every node independently finalizes the same cert ───
     {
         Bus bus;
-        std::vector<std::unique_ptr<Node>> nodes;
+        std::vector<std::unique_ptr<Party>> nodes;
         make_nodes(bus, nodes);
         const VotePosition pos = make_pos(0x41, 1);
         for (auto & n : nodes) n->submit(pos);
@@ -102,7 +102,7 @@ int main() {
     //        nodes still finalize the real block on 4 honest votes (80 > 66). ──
     {
         Bus bus;
-        std::vector<std::unique_ptr<Node>> nodes;
+        std::vector<std::unique_ptr<Party>> nodes;
         make_nodes(bus, nodes);
         const VotePosition real = make_pos(0x42, 2);
         const VotePosition forged = make_pos(0x99, 2);  // same height, different block
@@ -126,7 +126,7 @@ int main() {
     // ── [3] only 3 honest votes (60 ≤ 66) ⇒ no finality (safety) ─────────────
     {
         Bus bus;
-        std::vector<std::unique_ptr<Node>> nodes;
+        std::vector<std::unique_ptr<Party>> nodes;
         make_nodes(bus, nodes);
         const VotePosition pos = make_pos(0x43, 3);
         for (auto & n : nodes) n->submit(pos);
