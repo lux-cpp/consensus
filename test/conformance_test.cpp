@@ -483,6 +483,114 @@ void cert_shapes() {
           "the smallest well-formed certificate is 313 bytes, as Go records it");
 }
 
+// ── 9. the weighted finality decision ────────────────────────────────────────
+//
+// Everything above this asks what an implementation ENCODES. This asks what it
+// DECIDES, which is a different question and the one that went unasked: a build
+// carrying no weighted predicate at all reproduced every byte of this corpus and
+// reported PASS. Each row states a validator set, the distinct signers a
+// certificate carries and the rung it attests; Go recorded what its predicate
+// decided, and this must decide the same.
+//
+// The engine is constructed with alpha = 1 deliberately. Quasar's distinct-voter
+// floor here is alpha, and Go's export rung carries NO signer floor of its own —
+// only the stake floor. alpha = 1 is the smallest legal value and it can never
+// bind (a row with one signer already fails the stake clause), so the C++ gate
+// asks exactly Go's question. Any larger alpha would silently add a clause Go
+// does not have.
+//
+// Signatures are real because they must be: the floors are checked before any
+// pairing, so a refusal needs no key material, but nothing reaches ACCEPT
+// without one. The keys are derived here rather than carried in the corpus —
+// what is frozen is the decision, not a key ceremony, and the message the votes
+// are cast over does not change any verdict.
+struct Seat { std::array<std::uint8_t, 32> sk{}; PubKey pk{}; };
+
+Seat seat_key(std::size_t i) {
+    std::array<std::uint8_t, 32> seed{};
+    seed[0] = static_cast<std::uint8_t>(i >> 8);
+    seed[1] = static_cast<std::uint8_t>(i);
+    for (std::size_t j = 2; j < 32; ++j) seed[j] = static_cast<std::uint8_t>(0x5A ^ (i + j));
+    Seat s;
+    if (bls::keygen(seed.data(), s.sk.data()) != 0) die("keygen");
+    if (bls::sk_to_pk(s.sk.data(), s.pk.data()) != 0) die("sk_to_pk");
+    return s;
+}
+
+void weighted_decision() {
+    banner("weighted decision — the signer floor and the stake floor over a live set");
+
+    std::size_t accepted = 0, refused = 0;
+    for (const Row& r : load("decision.json")) {
+        const std::string name = field(r, "name");
+        const std::string rung = field(r, "rung");
+        if (rung != "nova" && rung != "quasar")
+            die(name + ": a certificate attests nova or quasar, not " + rung);
+        const Tier tier = (rung == "nova") ? Tier::Nova : Tier::Quasar;
+
+        const std::size_t n = static_cast<std::size_t>(u64(r, "set_size"));
+        const std::size_t k = static_cast<std::size_t>(u64(r, "signer_count"));
+        const std::vector<std::uint8_t> nodes   = unhex(field(r, "nodes"));
+        const std::vector<std::uint8_t> weights = unhex(field(r, "weights"));
+        const std::vector<std::uint8_t> signers = unhex(field(r, "signers"));
+        if (nodes.size() != n * kNodeLen || weights.size() != n * 8 || signers.size() != k * kNodeLen)
+            die(name + ": the row's set is not " + std::to_string(n) + " entries wide");
+
+        // The count floor, conformed on its own: a set of this size demands this
+        // many distinct signers at Nova whatever the stake is.
+        check(nova_signer_floor(static_cast<std::uint32_t>(n)) == u64(r, "nova_signer_floor"),
+              name + ": nova signer floor matches Go");
+
+        // Seat the set: seat i holds the row's i-th weight under its own key.
+        std::vector<Validator> vals;
+        vals.reserve(n);
+        std::vector<Seat> keys;
+        keys.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            std::uint64_t w = 0;
+            for (std::size_t b = 0; b < 8; ++b) w = (w << 8) | weights[i * 8 + b];
+            keys.push_back(seat_key(i));
+            vals.push_back(Validator{keys[i].pk, w});
+        }
+
+        QuorumCertEngine engine(vals, /*alpha=*/1);
+        check(engine.total_stake() == u64(r, "total"), name + ": total stake matches Go");
+        check(engine.stake_floor(tier) == u64(r, "stake_floor"),
+              name + ": the " + rung + " stake floor matches Go");
+
+        // One block, one position. The decision does not depend on it, which the
+        // corpus states outright, so the harness carries no position material.
+        VotePosition pos{};
+        if (!engine.submit(pos)) die(name + ": the block did not register");
+
+        for (std::size_t j = 0; j < k; ++j) {
+            // Which seat signed, by the node id the corpus names.
+            std::size_t at = n;
+            for (std::size_t i = 0; i < n; ++i)
+                if (std::equal(signers.begin() + std::ptrdiff_t(j * kNodeLen),
+                               signers.begin() + std::ptrdiff_t((j + 1) * kNodeLen),
+                               nodes.begin() + std::ptrdiff_t(i * kNodeLen))) { at = i; break; }
+            if (at == n) die(name + ": a signer is not in the set it is weighed against");
+
+            const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
+            Signature sig{};
+            if (bls::sign(keys[at].sk.data(), msg.data(), msg.size(), sig.data()) != 0) die("sign");
+            if (engine.record_vote(pos.block_id, keys[at].pk, sig) != VoteResult::Recorded)
+                die(name + ": a vote from the set was not recorded");
+        }
+
+        check(engine.voted_stake(pos.block_id) == u64(r, "voted"), name + ": the tally matches Go");
+
+        const bool want = field(r, "expect") == "accept";
+        const bool got  = engine.is_final(pos.block_id, tier);
+        check(got == want, name + ": " + rung + " decides " + field(r, "expect") +
+                               (got == want ? "" : std::string(" (got ") + (got ? "accept" : "reject") + ")"));
+        (want ? accepted : refused)++;
+    }
+    std::printf("   %zu certificates accepted, %zu refused — on stake and on distinct signers\n",
+                accepted, refused);
+}
+
 }  // namespace
 
 int main() {
@@ -496,6 +604,7 @@ int main() {
     cert_wire();
     cert_wire_strict();
     cert_verify();
+    weighted_decision();
     cert_shapes();
 
     std::printf("\n----------------------------------------------------------------\n");
