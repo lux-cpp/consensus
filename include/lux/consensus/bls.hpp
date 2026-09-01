@@ -60,4 +60,25 @@ int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
                           const std::uint8_t* msg, std::size_t msg_len,
                           const std::uint8_t agg_sig[96]) noexcept;
 
+// The proof-of-possession ciphersuite — byte-identical to Go's dstPoP, distinct
+// from kVoteDST by the _POP_ tag so a vote is never a proof and a proof never a
+// vote. See luxfi/conformance vectors/pop.json, the frozen cross-language corpus.
+inline constexpr char        kPopDST[]  = "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+inline constexpr std::size_t kPopDSTLen = sizeof(kPopDST) - 1;  // 43
+inline constexpr std::size_t kNodeLen   = 20;  // the 20-byte NodeID a proof binds
+
+// The class a proof-of-possession check returns, matching the Go oracle's three
+// error classes so a conforming implementation is told which clause rejects, not
+// merely that one does.
+enum class Pop { Ok = 0, Key, Proof, Possession };
+
+// pop_verify checks a node-bound proof of possession: `proof` is a signature by
+// `pk` over the 68-byte message (node ‖ pk) under kPopDST. The order is fixed —
+// encoding, then possession: `pk`/`proof` are rejected as Key/Proof when not a
+// canonical, in-subgroup, non-identity point; a proof that decodes but does not
+// bind this node to this key is Possession. Byte-for-byte the Go validator/pop
+// and the Rust lux_consensus::pop.
+Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
+               const std::uint8_t proof[96]) noexcept;
+
 }  // namespace lux::consensus::bls
