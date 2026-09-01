@@ -43,6 +43,7 @@ func main() {
 	write(*out, "committee.json", committees())
 	write(*out, "cert_wire.json", certWire())
 	write(*out, "cert_verify.json", certVerify())
+	write(*out, "decision.json", decisions())
 }
 
 func write(dir, name string, rows []map[string]any) {
