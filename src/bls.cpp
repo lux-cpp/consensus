@@ -9,6 +9,7 @@
 #include "bls_signature.hpp"  // cevm::crypto::bls — reused, domain-free bodies
 
 #include <blst.h>
+#include <cstring>
 
 namespace lux::consensus::bls {
 
@@ -85,6 +86,40 @@ int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
     const int rc = cevm::crypto::bls::aggregate_pubkeys(pks, n, agg_pk);
     if (rc != 0) return rc;
     return verify(agg_pk, msg, msg_len, agg_sig);
+}
+
+}  // namespace lux::consensus::bls
+
+namespace lux::consensus::bls {
+
+Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
+               const std::uint8_t proof[96]) noexcept {
+    if (node == nullptr || pk == nullptr || proof == nullptr) return Pop::Key;
+
+    // ENCODING of the key: canonical compressed G1, in the prime-order subgroup,
+    // not the identity. blst's uncompress refuses a non-canonical (x >= p)
+    // spelling; in_g1 refuses an off-subgroup point; is_inf refuses the identity
+    // that the Go/Rust oracles also reject at this leg.
+    blst_p1_affine pk_aff;
+    if (blst_p1_uncompress(&pk_aff, pk) != BLST_SUCCESS) return Pop::Key;
+    if (!blst_p1_affine_in_g1(&pk_aff)) return Pop::Key;
+    if (blst_p1_affine_is_inf(&pk_aff)) return Pop::Key;
+
+    // ENCODING of the proof: canonical compressed G2, in-subgroup, non-identity.
+    blst_p2_affine sig_aff;
+    if (blst_p2_uncompress(&sig_aff, proof) != BLST_SUCCESS) return Pop::Proof;
+    if (!blst_p2_affine_in_g2(&sig_aff)) return Pop::Proof;
+    if (blst_p2_affine_is_inf(&sig_aff)) return Pop::Proof;
+
+    // POSSESSION: the proof signs node ‖ key, 68 bytes, under the POP domain.
+    std::uint8_t msg[kNodeLen + 48];
+    std::memcpy(msg, node, kNodeLen);
+    std::memcpy(msg + kNodeLen, pk, 48);
+    const BLST_ERROR rc = blst_core_verify_pk_in_g1(
+        &pk_aff, &sig_aff, /*hash_or_encode=*/true, msg, sizeof(msg),
+        reinterpret_cast<const std::uint8_t*>(kPopDST), kPopDSTLen,
+        /*aug=*/nullptr, /*aug_len=*/0);
+    return rc == BLST_SUCCESS ? Pop::Ok : Pop::Possession;
 }
 
 }  // namespace lux::consensus::bls

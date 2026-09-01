@@ -1,0 +1,115 @@
+{
+  "note": "Message = node(20) || compressed-G1-pubkey(48), 68 bytes, no separator, signed under DST as a BLS12-381 min_pk proof of possession (compressed G2, 96 bytes). Verify order: encoding, then possession. A conforming implementation must accept exactly the valid case and refuse every other with the named error class.",
+  "source": "github.com/luxfi/consensus/validator/pop",
+  "dst": "BLS_POP_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_",
+  "node_len": 20,
+  "key_len": 48,
+  "proof_len": 96,
+  "message_len": 68,
+  "layout": "node[0:20] || key[20:68]",
+  "cases": [
+    {
+      "name": "valid: the proof binds its own node and key",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": true
+    },
+    {
+      "name": "lifted: node 1's proof under node 2's identity",
+      "node": "2222222222222222222222222222222222222222",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": false,
+      "error": "pop: proof does not bind this node to this key"
+    },
+    {
+      "name": "wrong key: node 1's proof over node 2's key",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "ac80a5e08c712d5f08f0306ad743f7d8c215d982489b84a1d6ba805733d94c006e8938f9089a75db3ffa135af33bc69a",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": false,
+      "error": "pop: proof does not bind this node to this key"
+    },
+    {
+      "name": "another pair's proof: node 2's proof for node 1",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "940f886a1704ce5776ff2aaaed2763f774b5aec4c30e1216191de63038502115da66cf5d85b83c40d48d389e6bfa32350f5e98c5d3c895c0788404126b72c83e735ecd74fe893381478dd7c68fde7ffcdea19981965be48dcf815e9a9302d6fd",
+      "accepted": false,
+      "error": "pop: proof does not bind this node to this key"
+    },
+    {
+      "name": "vote domain: the message signed under ..._NUL_ not ..._POP_",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "a90b843da2a53fd31630d39032e37b869aa8113b00e89d35e938e74636a56a5f311ea37ba41fd0d1f91ec4431cb0038600781df69eb55ae586afd2924475edb5c69f965140806192db67c1a14f208dbd9b7ca9df1e08dbc7d931ddc9117b2093",
+      "accepted": false,
+      "error": "pop: proof does not bind this node to this key"
+    },
+    {
+      "name": "empty proof",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "",
+      "accepted": false,
+      "error": "pop: proof is not a canonical compressed BLS12-381 G2 point"
+    },
+    {
+      "name": "garbage proof: 96 bytes of 0xAB",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "accepted": false,
+      "error": "pop: proof is not a canonical compressed BLS12-381 G2 point"
+    },
+    {
+      "name": "short proof: 95 bytes",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "accepted": false,
+      "error": "pop: proof is not a canonical compressed BLS12-381 G2 point"
+    },
+    {
+      "name": "long proof: 97 bytes",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "accepted": false,
+      "error": "pop: proof is not a canonical compressed BLS12-381 G2 point"
+    },
+    {
+      "name": "identity proof: compressed G2 infinity",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253b",
+      "proof": "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "accepted": false,
+      "error": "pop: proof is not a canonical compressed BLS12-381 G2 point"
+    },
+    {
+      "name": "identity key: compressed G1 infinity",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": false,
+      "error": "pop: public key is not a canonical compressed BLS12-381 G1 point"
+    },
+    {
+      "name": "short key: 47 bytes",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c25",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": false,
+      "error": "pop: public key is not a canonical compressed BLS12-381 G1 point"
+    },
+    {
+      "name": "non-canonical key: on-curve point outside the prime-order subgroup",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": false,
+      "error": "pop: public key is not a canonical compressed BLS12-381 G1 point"
+    }
+  ]
+}
