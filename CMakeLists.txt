@@ -80,7 +80,8 @@ target_link_libraries(bls_signature PUBLIC blst)
 
 # ── consensus — the NEW finality gate (the seed) ─────────────────────────────
 add_library(consensus STATIC
-  src/threshold.cpp src/bls.cpp src/cert.cpp src/quorum_cert_engine.cpp src/wave.cpp src/node.cpp)
+  src/threshold.cpp src/bls.cpp src/cert.cpp src/registration.cpp src/quorum_cert_engine.cpp
+  src/wave.cpp src/node.cpp)
 target_include_directories(consensus PUBLIC include)
 # bls_signature carries the reused domain-free bodies; blst carries the curve. The
 # consensus vote domain (src/bls.cpp) needs blst's headers directly — see bls.hpp.
@@ -137,6 +138,7 @@ set(CONSENSUS_TESTS
   tier                 # the two finality rungs: Nova (accept) and Quasar (export)
   conformance          # the Go corpus: message bytes, DST, floors, thresholds
   pop_conformance      # the node-bound proof of possession, byte-for-byte vs Go & Rust
+  registration         # the admission door: possession, one key one node, one node one key
   quasar_verify        # the witness verifier vs the Go fixtures, C++ AND C ABI
   quasar_witness)      # threshold-share aggregation on Go's (index || sig) wire form
 

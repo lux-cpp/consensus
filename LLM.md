@@ -98,12 +98,62 @@ verified and the block's later votes each pay their own pairing.
 A caller cannot hand it a foreign position — which used to make the node sign a
 vote its own gate would evict AND burn the wrong equivocation slot.
 
+## Admission — the set the rule runs on
+
+A certificate is only as sound as the set it is checked against, and until
+`registration.hpp` there was no door: a caller built a `Registry` by calling
+`insert()` with whatever pairs it liked, so ONE key holder could be seated under
+MANY node ids. A two-signer floor was then cleared by one signature, and nothing
+downstream could catch it — the verifier is right to accept a set that says two
+nodes signed. `admit()` is the one door, and it enforces Go
+`validator/registration.go` clause for clause:
+
+```
+ENCODING     canonical compressed G1 key, canonical compressed G2 proof
+POSSESSION   bls::pop_verify — the proof binds THIS key to THIS node
+UNIQUENESS   one key ↔ one node, on BOTH axes (neither implies the other)
+WEIGHT       counted last — weight counted before uniqueness is counted twice
+```
+
+Possession alone is **not** enough, and that is the whole reason uniqueness is a
+separate clause: the holder of a key can mint a genuine node-bound proof for any
+identity it likes, so every registration in a many-nodes-one-key set is
+individually sound. Only a rule over the SET refuses it.
+
+The set is admitted **whole or not at all** — one bad registration fails the call
+rather than being dropped, because a set that silently loses a signer has a total
+weight that no longer describes it, and both stake floors are taken of that
+total. The walk is in node-id order, so which registration a set is refused on is
+a function of the set and not of the caller's vector order.
+
+`CanonicalSet` is ordered ascending by the **compressed** key (never the
+uncompressed form, which is 96 bytes under one crypto build and 48 under another
+and orders the same set two ways). It is the one producer of a
+`QuorumCertEngine`'s validators (`weights()`) and of a cert `Registry`
+(`install()`, which refuses a non-empty registry so a retired set cannot carry
+over into a live one).
+
+**The validator identity is the 20-byte NodeID** — `lux::consensus::Node`, in
+`cert.hpp`, the identity a certificate's votes carry and the same 20 bytes the
+proof of possession binds. `registration.hpp` static-asserts it against
+`bls::kNodeLen` so the wire's spelling of that width and the proof preimage's
+cannot drift apart.
+
+> **Trap.** `lux::consensus::Node` (the 20-byte id, `cert.hpp`) and
+> `lux::consensus::Node` (the participant class, `node.hpp`) are two different
+> things under one name, so `cert.hpp` and `node.hpp` — and therefore
+> `registration.hpp` and `node.hpp` — cannot appear in one translation unit.
+> Pre-existing. The fix is to rename the participant: the 20-byte id is `Node` in
+> Rust and `ids.NodeID` in Go, so it keeps the name, and the class that runs the
+> protocol becomes `Party`.
+
 ## Layout
 
 ```
 include/lux/consensus/threshold.hpp   the quorum floors — one home, two consumers
 include/lux/consensus/bls.hpp         the Lux consensus vote domain over blst
 include/lux/consensus/quorum_cert_engine.hpp   the gate: rule, position, cert
+include/lux/consensus/registration.hpp the admission door: proof, uniqueness, weight
 include/lux/consensus/wave.hpp        FPC threshold voting + β confidence
 include/lux/consensus/photon.hpp      committee sampling (header-only)
 include/lux/consensus/node.hpp        one validator: poll, sign, disseminate
