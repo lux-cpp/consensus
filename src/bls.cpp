@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace lux::consensus::bls {
@@ -117,18 +118,21 @@ int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
 
 namespace lux::consensus::bls {
 
-Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
-               const std::uint8_t proof[96]) noexcept {
-    if (node == nullptr || pk == nullptr || proof == nullptr) return Pop::Key;
+namespace {
 
-    // ENCODING of the key: canonical compressed G1, in the prime-order subgroup,
-    // not the identity. blst's uncompress refuses a non-canonical (x >= p)
-    // spelling; in_g1 refuses an off-subgroup point; is_inf refuses the identity
-    // that the Go/Rust oracles also reject at this leg.
-    blst_p1_affine pk_aff;
-    if (blst_p1_uncompress(&pk_aff, pk) != BLST_SUCCESS) return Pop::Key;
-    if (!blst_p1_affine_in_g1(&pk_aff)) return Pop::Key;
-    if (blst_p1_affine_is_inf(&pk_aff)) return Pop::Key;
+// The key leg, DECODED: the point, or nothing. One definition, and it hands back
+// what it decoded so the caller that needs the point does not decode it twice.
+//
+// Canonical compressed G1, in the prime-order subgroup, not the identity. blst's
+// uncompress refuses a non-canonical (x >= p) spelling; in_g1 refuses an
+// off-subgroup point; is_inf refuses the identity that the Go/Rust oracles also
+// reject at this leg.
+std::optional<blst_p1_affine> decode_key(const std::uint8_t pk[48]) noexcept {
+    if (pk == nullptr) return std::nullopt;
+    blst_p1_affine aff;
+    if (blst_p1_uncompress(&aff, pk) != BLST_SUCCESS) return std::nullopt;
+    if (!blst_p1_affine_in_g1(&aff)) return std::nullopt;
+    if (blst_p1_affine_is_inf(&aff)) return std::nullopt;
     // One point, one encoding. A decoder that accepted a second spelling of the
     // same key would let a registrant choose which 48 bytes the message carries,
     // and the proof is over the caller's bytes. Go checks this at the same leg,
@@ -137,8 +141,24 @@ Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
     // blst refuses a non-canonical x on the way in, so this is a wall behind a
     // wall — which is where it belongs, and not at one caller's discretion.
     std::uint8_t round_trip[48];
-    blst_p1_affine_compress(round_trip, &pk_aff);
-    if (std::memcmp(round_trip, pk, sizeof(round_trip)) != 0) return Pop::Key;
+    blst_p1_affine_compress(round_trip, &aff);
+    if (std::memcmp(round_trip, pk, sizeof(round_trip)) != 0) return std::nullopt;
+    return aff;
+}
+
+}  // namespace
+
+bool key_validate(const std::uint8_t pk[48]) noexcept { return decode_key(pk).has_value(); }
+
+Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
+               const std::uint8_t proof[96]) noexcept {
+    if (node == nullptr || proof == nullptr) return Pop::Key;
+
+    // ENCODING of the key — the whole of it, in one place, shared with the gate's
+    // constructor so the two cannot come to disagree about what a key is.
+    const std::optional<blst_p1_affine> decoded = decode_key(pk);
+    if (!decoded) return Pop::Key;
+    const blst_p1_affine pk_aff = *decoded;
 
     // ENCODING of the proof: canonical compressed G2, in-subgroup, non-identity.
     blst_p2_affine sig_aff;
