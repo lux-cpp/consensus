@@ -106,14 +106,17 @@ QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators) : total_st
     }
 }
 
+std::uint32_t signer_floor(Tier tier, std::uint32_t n) noexcept {
+    // Both derived from the set, neither configured. The export floor is the
+    // supermajority in seats — the same one the stake floor asks for in stake — so
+    // a certificate must carry two thirds of the parties AND two thirds of the
+    // weight. Reading only stake makes "supermajority" mean one signature wherever
+    // the weight is concentrated in one validator.
+    return tier == Tier::Quasar ? two_thirds_count(n) : nova_signer_floor(n);
+}
+
 std::uint32_t QuorumCertEngine::signer_floor(Tier tier) const noexcept {
-    // Both derived from the live set, neither configured. The export floor is the
-    // supermajority in seats — the same one the stake floor below asks for in
-    // stake — so a certificate must carry two thirds of the parties AND two thirds
-    // of the weight. Reading only stake makes "supermajority" mean one signature
-    // wherever the weight is concentrated in one validator.
-    return tier == Tier::Quasar ? two_thirds_count(validator_count())
-                                : nova_signer_floor(validator_count());
+    return lux::consensus::signer_floor(tier, validator_count());
 }
 
 std::uint64_t QuorumCertEngine::stake_floor(Tier tier) const noexcept {

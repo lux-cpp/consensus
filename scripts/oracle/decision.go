@@ -24,6 +24,11 @@
 // at three and Quasar's is the export supermajority in seats — so a column that
 // always reported Nova's would be telling the C++ gate the wrong number about the
 // clause a Quasar row can now fail.
+//
+// threshold is beside it and is a DIFFERENT fact: signer_floor is what the set
+// derives, threshold is what the certificate claims. They are equal on every
+// honest row and that equality is itself a clause — the derived-authority rule —
+// so both are projected and a runner checks one against the other.
 package main
 
 import (
@@ -92,6 +97,11 @@ func decisions() []map[string]any {
 			// reading would have refused the row, in seats as well as in stake.
 			"roll":         len(c.Set),
 			"voted":        c.Voted,
+			// What the certificate DECLARES its quorum to be. It is projected because
+			// the declaration is now load-bearing: a certificate must declare exactly
+			// the floor its set derives, and three rows declare something else on
+			// purpose. A runner handed only the floor could not reproduce them.
+			"threshold":    c.Threshold,
 			"signer_floor": c.SignerFloor,
 			"stake_floor":  c.StakeFloor,
 			"expect":       expect,

@@ -78,6 +78,13 @@ enum class Refusal {
     Signature,        // a signature did not verify against its resolved key
     BelowThreshold,   // fewer valid distinct accept votes than the floor
     Wire,             // short read, trailing byte, or an impossible vote count
+    // The weighted clauses. A certificate that clears every clause above is
+    // structurally sound and says nothing yet about whether a validator set
+    // authorizes it; these are that second question.
+    ThresholdNotDerived,      // it declared a quorum this set does not derive for its rung
+    StakeBelowMajority,       // nova: the voters do not hold a strict majority of signer stake
+    StakeBelowSupermajority,  // quasar: the voters do not hold a strict two thirds of it
+    WeightOverflow,           // the tally does not fit — a source describing no admissible set
 };
 
 [[nodiscard]] const char* refusal_name(Refusal r) noexcept;
@@ -98,6 +105,33 @@ public:
     [[nodiscard]] virtual bool verify(const Node& node,
                                       const std::uint8_t* message, std::size_t message_len,
                                       const std::uint8_t* signature, std::size_t signature_len) const = 0;
+};
+
+// The weighted validator set, read by node id — Go's chain.StakeSource and Rust's
+// cert::StakeSource, in C++.
+//
+// Three projections of ONE set at ONE height, and they must describe that one set:
+// a source answering `signer_stake` over the signers and `signer_count` over every
+// member states two different sets, and the two floors stop being one supermajority
+// in two units.
+//
+// It is separate from Keys because membership and weight are separate facts read
+// from separate places: the registry answers "did this node sign", the set answers
+// "what does this node weigh". A certificate needs both and neither implies the
+// other.
+class Stake {
+public:
+    virtual ~Stake() = default;
+    // The voting weight of `node`, or 0 for a stranger, a member outside the set, or
+    // a member holding no key — none of the three can put weight behind a vote, so
+    // none may inflate a tally.
+    [[nodiscard]] virtual std::uint64_t weight(const Node& node) const = 0;
+    // The stake held by validators that CAN sign — the denominator every stake floor
+    // is read against, and never what the chain merely carries.
+    [[nodiscard]] virtual std::uint64_t signer_stake() const = 0;
+    // The number of distinct validators that can sign — the n every count floor is
+    // read against, over the same set as signer_stake.
+    [[nodiscard]] virtual std::uint32_t signer_count() const = 0;
 };
 
 // The gossiped witness.
@@ -128,6 +162,27 @@ struct Cert {
     // path that returns None without every signature having verified against a
     // resolved key.
     [[nodiscard]] Refusal verify(const Keys& keys) const;
+
+    // THE ACCEPT RULE. verify() above is the structural and signature predicate and
+    // is NOT an accept rule on its own: its last clause counts distinct valid
+    // accepts against the certificate's OWN threshold, so a certificate declaring 1
+    // clears it on one signature. This is the predicate a node admits a gossiped
+    // certificate under — Go's QuorumCert.VerifyWeighted and Rust's
+    // Cert::verify_weighted, clause for clause:
+    //
+    //   verify(keys)                     — structure and every signature
+    //   threshold == signer_floor(tier,n)— DERIVED AUTHORITY: a certificate states
+    //                                      its quorum, it does not choose it
+    //   Nova   → voters ≥ signer_floor, voted > half_stake_floor(signer stake)
+    //   Quasar → voted > two_thirds_stake_floor(signer stake),
+    //            n ≥ kMinBFTCommittee, voters ≥ signer_floor
+    //
+    // Every floor is recomputed from `stake`, never read out of the certificate, so
+    // a Nova set of votes relabelled Quasar fails the two-thirds clause and a Quasar
+    // certificate relabelled Nova merely under-claims. An unresolved set (n < 1)
+    // derives no floor: the derived clause steps aside and the rung's own clause
+    // refuses, which is not a pass — both rungs fail closed there.
+    [[nodiscard]] Refusal verify_weighted(const Keys& keys, const Stake& stake) const;
 };
 
 // The admitted set — registration.hpp. Seating a Registry is its business, and

@@ -524,6 +524,43 @@ Seat seat_key(std::size_t i) {
     return s;
 }
 
+// The corpus names a refusal as a CLASS. C++ names its clauses more finely in
+// places and more coarsely in others — an unresolved set, a committee below the
+// Byzantine floor and a short signer count are one class in the corpus and three
+// clauses here — so the equivalence is written down once, and a real disagreement
+// about the DECISION cannot hide inside a difference of vocabulary.
+std::string corpus_class(Refusal r) {
+    switch (r) {
+        case Refusal::None:                    return "";
+        case Refusal::BelowThreshold:          return "belowThreshold";
+        case Refusal::StakeBelowMajority:      return "stakeBelowMajority";
+        case Refusal::StakeBelowSupermajority: return "stakeBelowSupermajority";
+        case Refusal::ThresholdNotDerived:     return "thresholdNotDerived";
+        case Refusal::WeightOverflow:          return "weightOverflow";
+        default:                               return refusal_name(r);
+    }
+}
+
+// The row's weighted set, read by node id. Three projections of ONE set, which is
+// what the seam demands: a spectator is not projected at all (see decisions()), so
+// the signer stake and the signer count here ARE the row's denominators.
+class RowStake : public Stake {
+public:
+    RowStake(std::map<Node, std::uint64_t> w, std::uint64_t total, std::uint32_t n)
+        : w_(std::move(w)), total_(total), n_(n) {}
+    [[nodiscard]] std::uint64_t weight(const Node& node) const override {
+        const auto it = w_.find(node);
+        return it == w_.end() ? 0 : it->second;
+    }
+    [[nodiscard]] std::uint64_t signer_stake() const override { return total_; }
+    [[nodiscard]] std::uint32_t signer_count() const override { return n_; }
+
+private:
+    std::map<Node, std::uint64_t> w_;
+    std::uint64_t                 total_;
+    std::uint32_t                 n_;
+};
+
 void weighted_decision() {
     banner("weighted decision — the signer floor and the stake floor over a live set");
 
@@ -646,9 +683,87 @@ void weighted_decision() {
         check(engine.voted_stake(pos.block_id) == u64(r, "voted"), name + ": the tally matches Go");
 
         const bool want = field(r, "expect") == "accept";
+
+        // THE LOCAL GATE IS ASKED A DIFFERENT QUESTION, and the difference is
+        // exactly one clause. is_final weighs a TALLY: this node collected these
+        // votes itself, so there is no certificate and nothing that DECLARES a
+        // quorum — the floors are all there is to check. A row refused only for its
+        // declaration therefore passes here, and must: the votes and the stake on it
+        // are genuine, and the thing wrong with it is a field the local gate is
+        // never handed. The portable certificate below is where the declaration is
+        // checked, and it refuses those rows.
+        const bool declaration_only = field(r, "refusal") == "thresholdNotDerived";
+        const bool want_local = want || declaration_only;
         const bool got  = engine.is_final(pos.block_id, tier);
-        check(got == want, name + ": " + rung + " decides " + field(r, "expect") +
-                               (got == want ? "" : std::string(" (got ") + (got ? "accept" : "reject") + ")"));
+        check(got == want_local,
+              name + ": the local gate decides " + (want_local ? "accept" : "reject") +
+                  (got == want_local ? "" : std::string(" (got ") + (got ? "accept" : "reject") + ")"));
+
+        // THE SAME ROW, ON THE PORTABLE CERTIFICATE. The gate above is the LOCAL
+        // one: a node that collected the votes itself, holding the keys, folding
+        // them once. This is the INTEROP object — what arrives from another node,
+        // named by node id and carrying a signature per voter — and until now it
+        // had only a structural verifier, so nothing on this side ever weighed a
+        // gossiped certificate against a validator set. Go's gossip path does
+        // (VerifyWeighted), and a certificate two implementations admit and one
+        // cannot weigh is not one rule.
+        //
+        // It also carries the clause the local gate cannot: a wire certificate
+        // DECLARES a threshold, and the declaration must be the floor the set
+        // derives. is_final is handed no declaration to check.
+        std::map<Node, std::uint64_t> by_node;
+        CanonicalSet admitted;
+        admitted.validators.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            Node id{};
+            std::copy_n(nodes.begin() + std::ptrdiff_t(i * kNodeLen), kNodeLen, id.begin());
+            by_node[id] = vals[i].stake;
+            admitted.validators.push_back(CanonicalValidator{id, keys[i].pk, vals[i].stake});
+        }
+        admitted.total_weight = engine.total_stake();
+        Registry registry;
+        if (!admitted.install(registry)) die(name + ": the row's set did not seat");
+
+        Cert wire;
+        wire.tier      = tier;
+        wire.position  = pos;
+        wire.threshold = static_cast<std::uint32_t>(u64(r, "threshold"));
+        const std::vector<std::uint8_t> wire_msg = wire.message();
+        for (std::size_t j = 0; j < k; ++j) {
+            Node id{};
+            std::copy_n(signers.begin() + std::ptrdiff_t(j * kNodeLen), kNodeLen, id.begin());
+            std::size_t at = n;
+            for (std::size_t i = 0; i < n; ++i) {
+                Node cand{};
+                std::copy_n(nodes.begin() + std::ptrdiff_t(i * kNodeLen), kNodeLen, cand.begin());
+                if (cand == id) { at = i; break; }
+            }
+            if (at == n) die(name + ": a signer is not in the set it is weighed against");
+            Signature sig{};
+            if (bls::sign(keys[at].sk.data(), wire_msg.data(), wire_msg.size(), sig.data()) != 0)
+                die("sign");
+            wire.votes.push_back(Vote{id, true, std::vector<std::uint8_t>(sig.begin(), sig.end())});
+        }
+        // Node ids ascend in the corpus, which is the order the wire demands.
+        std::sort(wire.votes.begin(), wire.votes.end(),
+                  [](const Vote& a, const Vote& b) { return a.node < b.node; });
+
+        const RowStake row_stake(by_node, u64(r, "total"),
+                                 static_cast<std::uint32_t>(n));
+        const std::string got_class = corpus_class(wire.verify_weighted(registry, row_stake));
+        const std::string want_class = field(r, "refusal");
+        check(got_class == want_class,
+              name + ": the portable certificate refuses as " +
+                  (want_class.empty() ? "ok" : want_class) +
+                  (got_class == want_class
+                       ? ""
+                       : " (got " + (got_class.empty() ? "ok" : got_class) + ")"));
+        // And the declaration the row carries is the floor this set derives, except
+        // on the rows whose whole subject is that it is not.
+        if (want_class != "thresholdNotDerived")
+            check(wire.threshold == signer_floor(tier, static_cast<std::uint32_t>(n)),
+                  name + ": the certificate declares the quorum its set derives");
+
         (want ? accepted : refused)++;
     }
     std::printf("   %zu certificates accepted, %zu refused — on stake and on distinct signers\n",
