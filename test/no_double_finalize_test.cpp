@@ -307,6 +307,15 @@ int main() {
             check(bus.broadcasts.size() == 1,
                   "[4b] sibling refused at decided height 20 even AFTER its slot is GC'd (durable gate)");
 
+            // A LAGGING observer reporting an older frontier must not move it back.
+            // If it did, height 20 would reopen with its slot already GC'd, and the
+            // sibling would become signable — the prune-then-resign fork, arriving
+            // by a stale message instead of a restart.
+            node.mark_finalized_through(5);
+            for (int r = 0; r < 4; ++r) node.poll(Bsib.block_id, 5, 5);
+            check(bus.broadcasts.size() == 1,
+                  "[4b] a LOWER frontier does not regress the decided one — height 20 stays closed");
+
             // A higher OPEN height (22 > frontier 21) remains signable — no liveness loss.
             for (int r = 0; r < 4; ++r) node.poll(C.block_id, 5, 5);
             check(bus.broadcasts.size() == 2 && bus.broadcasts.back().block_id == C.block_id,

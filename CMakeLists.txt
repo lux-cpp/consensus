@@ -176,19 +176,117 @@ target_compile_definitions(conformance_test PRIVATE
 target_compile_definitions(pop_conformance_test PRIVATE
     CONSENSUS_VECTORS="${CONFORMANCE_DIR}")
 
-# Apply the requested sanitizer to consensus's OWN targets only (blst/bls stay
-# clean — see CONSENSUS_SANITIZE above). One place; every consensus target gets
-# the same instrumentation, the reused crypto none.
+# Consensus's OWN targets — the gate, the quasar pair, and every test. Written
+# once because two things instrument it (the sanitizer below, coverage after it)
+# and a target present in one list and missing from the other is instrumented in
+# one build and silently not in the other. blst and bls_signature are NOT here:
+# audited assembly crypto we keep unmodified, whose instrumentation is both
+# forbidden by policy and pathologically slow.
+set(CONSENSUS_OWN_TARGETS consensus luxconsensus_quasar luxconsensus_quasar_c)
+foreach(_t ${CONSENSUS_TESTS})
+    list(APPEND CONSENSUS_OWN_TARGETS ${_t}_test)
+endforeach()
+
+# Apply the requested sanitizer to consensus's OWN targets only — see
+# CONSENSUS_SANITIZE above.
 if (CONSENSUS_SANITIZE)
     set(_san -fsanitize=${CONSENSUS_SANITIZE} -fno-omit-frame-pointer)
-    set(_targets consensus luxconsensus_quasar luxconsensus_quasar_c)
-    foreach(_t ${CONSENSUS_TESTS})
-        list(APPEND _targets ${_t}_test)
-    endforeach()
-    foreach(_t ${_targets})
+    foreach(_t ${CONSENSUS_OWN_TARGETS})
         target_compile_options(${_t} PRIVATE ${_san})
         target_link_options(${_t} PRIVATE ${_san})
     endforeach()
+endif()
+
+# ── coverage ──────────────────────────────────────────────────────────────────
+# What the tests actually reach, MEASURED. -DCONSENSUS_COVERAGE=ON instruments
+# consensus's own code and adds one target:
+#
+#   cmake -S . -B build-cov -DCMAKE_BUILD_TYPE=Debug -DCONSENSUS_COVERAGE=ON \
+#         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+#   cmake --build build-cov --target coverage
+#
+# Clang's source-based coverage, not gcov, for two reasons. It counts REGIONS,
+# so a line carrying two clauses reports both and a half-tested predicate cannot
+# read as covered — which is the only measure worth quoting about a gate whose
+# clauses are the rule. And it is the same instrumentation `cargo llvm-cov`
+# reports the Rust crate with, so the C++ number and the Rust number mean the
+# same thing and can be put in one table. A build with any other compiler says
+# so rather than quietly measuring nothing.
+option(CONSENSUS_COVERAGE "Instrument consensus's own code and add the `coverage` target" OFF)
+if (CONSENSUS_COVERAGE)
+    if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR
+            "CONSENSUS_COVERAGE needs Clang's source-based coverage; this build uses "
+            "${CMAKE_CXX_COMPILER_ID}. Re-run with "
+            "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++")
+    endif()
+    find_program(LLVM_PROFDATA NAMES llvm-profdata llvm-profdata-18 llvm-profdata-17 REQUIRED)
+    find_program(LLVM_COV      NAMES llvm-cov      llvm-cov-18      llvm-cov-17      REQUIRED)
+
+    foreach(_t ${CONSENSUS_OWN_TARGETS})
+        target_compile_options(${_t} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+        target_link_options(${_t}    PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+    endforeach()
+
+    set(_cov "${CMAKE_BINARY_DIR}/coverage")
+    # One profile per test, named for the test — from the SAME list that declared
+    # them, so a test cannot be run by ctest and missed by the report. Named
+    # rather than globbed (%p) so the merge input is exact and a stale profile
+    # from an earlier run cannot slip into the number.
+    set(_run "")
+    set(_raw "")
+    list(GET CONSENSUS_TESTS 0 _first_test)
+    foreach(_t ${CONSENSUS_TESTS})
+        list(APPEND _run COMMAND ${CMAKE_COMMAND} -E env
+             "LLVM_PROFILE_FILE=${_cov}/${_t}.profraw" $<TARGET_FILE:${_t}_test>)
+        list(APPEND _raw "${_cov}/${_t}.profraw")
+    endforeach()
+
+    # Read from the binaries the profiles came out of — llvm-cov cannot open a
+    # static archive, and an archive's members alone lose the header inline
+    # functions, which are emitted into whichever translation unit uses them and
+    # are as much the gate as anything in src/. The shared quasar object joins
+    # them because its ABI (src/quasar_ffi.cpp) lives only there.
+    #
+    # test/ is filtered back out: the subject is the gate, and test files scoring
+    # themselves would only dilute the number. (llvm-cov warns that some
+    # functions have mismatched data — the per-test `main`s, one per binary and
+    # each a different shape under one name. They are in test/, so the filter
+    # drops them; every src/ figure is identical whether the report is read from
+    # the binaries or from the library objects alone.)
+    set(_objects $<TARGET_FILE:${_first_test}_test>)
+    foreach(_t ${CONSENSUS_TESTS})
+        if (NOT _t STREQUAL _first_test)
+            list(APPEND _objects -object $<TARGET_FILE:${_t}_test>)
+        endif()
+    endforeach()
+    list(APPEND _objects -object $<TARGET_FILE:luxconsensus_quasar_c>)
+    # Absolute paths, so /test/ names the directory and nothing else. Kept free of
+    # shell metacharacters: the generator hands this to /bin/sh verbatim.
+    set(_only "-ignore-filename-regex=/test/")
+
+    add_custom_target(coverage
+        DEPENDS ${CONSENSUS_OWN_TARGETS}
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_cov}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_cov}"
+        ${_run}
+        COMMAND ${LLVM_PROFDATA} merge -sparse -o "${_cov}/consensus.profdata" ${_raw}
+        COMMAND ${LLVM_COV} report ${_objects}
+                "-instr-profile=${_cov}/consensus.profdata"
+                "-show-region-summary" "${_only}"
+        USES_TERMINAL
+        COMMENT "consensus: running every test under instrumentation, then reporting what it reached")
+
+    # The same profile, per line, for reading the misses rather than counting them.
+    add_custom_target(coverage-show
+        DEPENDS coverage
+        COMMAND ${LLVM_COV} show ${_objects}
+                "-instr-profile=${_cov}/consensus.profdata"
+                "-show-line-counts-or-regions" "-show-branches=count" "${_only}"
+                "-output-dir=${_cov}/html" "-format=html"
+        COMMAND ${CMAKE_COMMAND} -E echo "coverage: ${_cov}/html/index.html"
+        USES_TERMINAL
+        COMMENT "consensus: per-line coverage, for reading the misses")
 endif()
 
 # ── bench_trilang — the C++ leg of the three-language CPU comparison ──────────

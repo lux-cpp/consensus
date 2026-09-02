@@ -20,9 +20,12 @@
 #include "lux/consensus/quorum_cert_engine.hpp"
 #include "lux/consensus/bls.hpp"
 
+#include <blst.h>
+
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -85,7 +88,7 @@ Signature sign_vote(const Key& key, const VotePosition& pos) {
 }
 
 void banner(int n, const char* title) {
-    std::printf("[%d/5] %s\n", n, title);
+    std::printf("[%d/6] %s\n", n, title);
 }
 
 void verdict(int n, bool ok) {
@@ -262,13 +265,172 @@ int main() {
     }
     verdict(5, s5);
 
+    // ── [6] the crypto surface itself refuses what a stub would wave through ──
+    // A stub verifies. That is the whole of what makes it a stub: it says yes,
+    // and it says yes to anything, because it never decoded anything. So the
+    // arguments no real implementation can accept are the sharpest thing to ask
+    // it about — a null key, a secret key outside the scalar field, a public key
+    // that is not a point, an aggregate over no keys at all.
+    banner(6, "the BLS surface refuses malformed arguments rather than answering yes");
+    bool s6 = true;
+    {
+        const Key k = make_key(0x51);
+        const VotePosition P = make_pos(0xF1, 900);
+        const std::vector<std::uint8_t> msg = canonical_vote_message(P);
+        const Signature sig = sign_vote(k, P);
+
+        s6 &= check(bls::verify(k.pk.data(), msg.data(), msg.size(), sig.data()) == 0,
+                    "the genuine signature verifies — every refusal below is one edit from it");
+
+        // Signing. A zero secret key is not a scalar; nor is one at or above the
+        // group order. Both must fail the IRTF range check, not produce a
+        // signature over a degenerate key.
+        Signature out{};
+        std::array<std::uint8_t, 32> zero_sk{};
+        s6 &= check(bls::sign(nullptr, msg.data(), msg.size(), out.data()) != 0,
+                    "signing with a null secret key fails");
+        s6 &= check(bls::sign(k.sk.data(), msg.data(), msg.size(), nullptr) != 0,
+                    "signing into a null buffer fails");
+        s6 &= check(bls::sign(k.sk.data(), nullptr, 7, out.data()) != 0,
+                    "signing a null message of non-zero length fails");
+        s6 &= check(bls::sign(zero_sk.data(), msg.data(), msg.size(), out.data()) != 0,
+                    "the zero secret key is refused — it is not a scalar");
+        std::array<std::uint8_t, 32> huge_sk{};
+        huge_sk.fill(0xFF);
+        s6 &= check(bls::sign(huge_sk.data(), msg.data(), msg.size(), out.data()) != 0,
+                    "and a secret key at or above the group order is refused too");
+        s6 &= check(bls::sign(k.sk.data(), nullptr, 0, out.data()) == 0,
+                    "a genuinely empty message signs — null with length zero IS empty");
+
+        // Verifying. The two failure CLASSES are distinguished: -1 says the bytes
+        // were never a point, 1 says they were a point and the pairing said no.
+        // Collapsing them would tell a caller to retry what it should drop.
+        PubKey garbage_pk{};
+        garbage_pk.fill(0xAB);
+        Signature garbage_sig{};
+        garbage_sig.fill(0xCD);
+        s6 &= check(bls::verify(nullptr, msg.data(), msg.size(), sig.data()) == -1,
+                    "a null public key is a decode failure");
+        s6 &= check(bls::verify(k.pk.data(), msg.data(), msg.size(), nullptr) == -1,
+                    "and so is a null signature");
+        s6 &= check(bls::verify(k.pk.data(), nullptr, 7, sig.data()) == -1,
+                    "a null message of non-zero length is refused before any pairing");
+        s6 &= check(bls::verify(garbage_pk.data(), msg.data(), msg.size(), sig.data()) == -1,
+                    "a public key that is not a point is a decode failure, not a verdict");
+        s6 &= check(bls::verify(k.pk.data(), msg.data(), msg.size(), garbage_sig.data()) == -1,
+                    "a signature that is not a point likewise");
+        Signature flipped = sig;
+        flipped[95] ^= 0x01;
+        s6 &= check(bls::verify(k.pk.data(), msg.data(), msg.size(), flipped.data()) != 0,
+                    "a signature with one bit flipped does not verify");
+        const std::vector<std::uint8_t> other = canonical_vote_message(make_pos(0xF2, 901));
+        s6 &= check(bls::verify(k.pk.data(), other.data(), other.size(), sig.data()) == 1,
+                    "a signature over another position decodes and then FAILS the pairing");
+
+        // Aggregate verification over a set. Zero keys is not an aggregate, and a
+        // key that will not decode cannot be summed into one.
+        std::vector<std::uint8_t> pks(k.pk.begin(), k.pk.end());
+        s6 &= check(bls::fast_aggregate_verify(pks.data(), 1, msg.data(), msg.size(), sig.data()) == 0,
+                    "an aggregate over one key is that key's own verification");
+        s6 &= check(bls::fast_aggregate_verify(nullptr, 1, msg.data(), msg.size(), sig.data()) != 0,
+                    "a null key array is refused");
+        s6 &= check(bls::fast_aggregate_verify(pks.data(), 1, msg.data(), msg.size(), nullptr) != 0,
+                    "and a null aggregate signature");
+        s6 &= check(bls::fast_aggregate_verify(pks.data(), 0, msg.data(), msg.size(), sig.data()) != 0,
+                    "an aggregate over ZERO keys is refused — it would verify against nothing");
+        s6 &= check(bls::fast_aggregate_verify(pks.data(), 1, nullptr, 7, sig.data()) != 0,
+                    "a null message of non-zero length is refused here too");
+        std::vector<std::uint8_t> bad_pks(48, 0xAB);
+        s6 &= check(bls::fast_aggregate_verify(bad_pks.data(), 1, msg.data(), msg.size(), sig.data()) != 0,
+                    "a key that will not decode cannot be aggregated");
+
+        // An EMPTY message is a message. A null pointer with length zero is how C
+        // spells one, and refusing it would refuse a signature that is perfectly
+        // well formed — the guard is against a null pointer that claims LENGTH,
+        // which is a caller bug, and not against emptiness.
+        Signature over_empty{};
+        if (bls::sign(k.sk.data(), nullptr, 0, over_empty.data()) != 0) { std::puts("sign empty"); std::exit(2); }
+        s6 &= check(bls::verify(k.pk.data(), nullptr, 0, over_empty.data()) == 0,
+                    "a signature over the empty message verifies");
+        s6 &= check(bls::fast_aggregate_verify(pks.data(), 1, nullptr, 0, over_empty.data()) == 0,
+                    "and aggregates the same way");
+        s6 &= check(bls::verify(k.pk.data(), nullptr, 0, sig.data()) == 1,
+                    "while a signature over a NON-empty message fails against the empty one");
+
+        // key_validate is the one definition of what a key is, shared with the
+        // gate's constructor and the possession door.
+        s6 &= check(bls::key_validate(k.pk.data()), "a real key validates");
+        s6 &= check(!bls::key_validate(nullptr), "a null key does not");
+        s6 &= check(!bls::key_validate(garbage_pk.data()), "and neither does a non-point");
+        PubKey identity{};
+        identity[0] = 0xC0;
+        s6 &= check(!bls::key_validate(identity.data()),
+                    "the identity is refused — it would verify a signature over any message");
+
+        // On the curve, outside the prime-order subgroup. It gets PAST the decode
+        // clause, which is why the subgroup check is a separate one: without it a
+        // point of small order can be made to pair to the identity (RFC 9380 §4.1).
+        // The answer is 1, not -1: it decoded, so it is a failed verification and
+        // not a malformed argument.
+        PubKey off_g1{};
+        {
+            bool found = false;
+            for (std::uint32_t x = 1; x < 4096 && !found; ++x) {
+                off_g1.fill(0);
+                off_g1[47] = std::uint8_t(x);
+                off_g1[46] = std::uint8_t(x >> 8);
+                off_g1[0] |= 0x80;
+                blst_p1_affine a;
+                found = blst_p1_uncompress(&a, off_g1.data()) == BLST_SUCCESS &&
+                        !blst_p1_affine_in_g1(&a);
+            }
+            if (!found) { std::puts("no off-subgroup G1 candidate"); std::exit(2); }
+        }
+        s6 &= check(!bls::key_validate(off_g1.data()), "an off-subgroup point is not a key");
+        s6 &= check(bls::verify(off_g1.data(), msg.data(), msg.size(), sig.data()) == 1,
+                    "an off-subgroup public key decodes and then FAILS — never verifies");
+
+        // The possession door shares the key leg with the gate, and adds its own
+        // for the proof. Its three answers are distinct on purpose: Key and Proof
+        // say which side never decoded, Possession says both decoded and the pair
+        // is not bound.
+        Signature off_g2{};
+        {
+            bool found = false;
+            for (std::uint32_t x = 1; x < 4096 && !found; ++x) {
+                off_g2.fill(0);
+                off_g2[95] = std::uint8_t(x);
+                off_g2[94] = std::uint8_t(x >> 8);
+                off_g2[0] |= 0x80;
+                blst_p2_affine a;
+                found = blst_p2_uncompress(&a, off_g2.data()) == BLST_SUCCESS &&
+                        !blst_p2_affine_in_g2(&a);
+            }
+            if (!found) { std::puts("no off-subgroup G2 candidate"); std::exit(2); }
+        }
+        std::array<std::uint8_t, bls::kNodeLen> node{};
+        node.fill(0x11);
+        Signature proof{};  // a proof this key never made
+        s6 &= check(bls::pop_verify(nullptr, k.pk.data(), proof.data()) == bls::Pop::Key,
+                    "a null node identity is a key-leg refusal");
+        s6 &= check(bls::pop_verify(node.data(), k.pk.data(), nullptr) == bls::Pop::Key,
+                    "and so is a null proof — there is nothing to decode on either side");
+        s6 &= check(bls::pop_verify(node.data(), garbage_pk.data(), off_g2.data()) == bls::Pop::Key,
+                    "a key that is not a point is refused on the KEY leg, before the proof");
+        s6 &= check(bls::pop_verify(node.data(), k.pk.data(), off_g2.data()) == bls::Pop::Proof,
+                    "an off-subgroup proof is refused on the PROOF leg, before any pairing");
+        s6 &= check(bls::pop_verify(node.data(), k.pk.data(), sig.data()) == bls::Pop::Possession,
+                    "and a well-formed proof that does not bind this pair is a POSSESSION refusal");
+    }
+    verdict(6, s6);
+
     // ── Summary ──────────────────────────────────────────────────────────────
-    const bool all = (s1 && s2 && s3 && s4 && s5) && (g_checks_failed == 0);
+    const bool all = (s1 && s2 && s3 && s4 && s5 && s6) && (g_checks_failed == 0);
     std::puts("\n------------------------------------------------------------------");
     std::printf("leaf checks: %d passed, %d failed\n", g_checks_passed, g_checks_failed);
-    std::printf("scenarios:   [1]%s [2]%s [3]%s [4]%s [5]%s\n",
+    std::printf("scenarios:   [1]%s [2]%s [3]%s [4]%s [5]%s [6]%s\n",
                 s1 ? "PASS" : "FAIL", s2 ? "PASS" : "FAIL", s3 ? "PASS" : "FAIL",
-                s4 ? "PASS" : "FAIL", s5 ? "PASS" : "FAIL");
-    std::printf("==== TOY-STUB-KILLER: %s ====\n", all ? "5/5 PASS" : "FAILED");
+                s4 ? "PASS" : "FAIL", s5 ? "PASS" : "FAIL", s6 ? "PASS" : "FAIL");
+    std::printf("==== TOY-STUB-KILLER: %s ====\n", all ? "6/6 PASS" : "FAILED");
     return all ? 0 : 1;
 }

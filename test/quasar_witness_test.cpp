@@ -18,8 +18,12 @@
 #include "lux/quasar.h"
 #include "lux/quasar.hpp"
 
+#include <blst.h>
+
 #include <cstdint>
 #include <cstring>
+#include <span>
+#include <string>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -87,6 +91,45 @@ void pack_share(std::vector<std::uint8_t>& out, std::uint32_t index,
     out.push_back(static_cast<std::uint8_t>((index >> 8)  & 0xFF));
     out.push_back(static_cast<std::uint8_t>( index        & 0xFF));
     out.insert(out.end(), sig96.begin(), sig96.end());
+}
+
+int g_fail = 0;
+void check(bool ok, const std::string& what) {
+    if (ok) { std::cout << "    ok   " << what << "\n"; return; }
+    ++g_fail;
+    std::cout << "    FAIL " << what << "\n";
+}
+
+// An on-curve G2 point outside the prime-order subgroup: the aggregator's second
+// clause is a subgroup check, and a point that fails the FIRST clause cannot
+// exercise it. blst's uncompress validates the curve equation only, so walking
+// candidate x values and keeping the first that decompresses gives one.
+std::vector<std::uint8_t> off_subgroup_g1() {
+    std::vector<std::uint8_t> enc(48, 0);
+    for (std::uint32_t x = 1; x < 4096; ++x) {
+        enc.assign(48, 0);
+        enc[47] = static_cast<std::uint8_t>(x);
+        enc[46] = static_cast<std::uint8_t>(x >> 8);
+        enc[0] |= 0x80;
+        blst_p1_affine a;
+        if (blst_p1_uncompress(&a, enc.data()) == BLST_SUCCESS && !blst_p1_affine_in_g1(&a))
+            return enc;
+    }
+    throw std::runtime_error("no off-subgroup G1 candidate found");
+}
+
+std::vector<std::uint8_t> off_subgroup_g2() {
+    std::vector<std::uint8_t> enc(96, 0);
+    for (std::uint32_t x = 1; x < 4096; ++x) {
+        enc.assign(96, 0);
+        enc[95] = static_cast<std::uint8_t>(x);
+        enc[94] = static_cast<std::uint8_t>(x >> 8);
+        enc[0] |= 0x80;
+        blst_p2_affine a;
+        if (blst_p2_uncompress(&a, enc.data()) == BLST_SUCCESS && !blst_p2_affine_in_g2(&a))
+            return enc;
+    }
+    throw std::runtime_error("no off-subgroup G2 candidate found");
 }
 
 }  // namespace
@@ -185,6 +228,178 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    // ---- The aggregator's refusals. An aggregate is the sum of what it was
+    // handed, so a share it should not have added is a signature nobody made.
+    {
+        using PK = std::span<const std::uint8_t, kPubKeyLen>;
+        const auto pk_of = [](const std::vector<std::uint8_t>& v) { return PK(v.data(), kPubKeyLen); };
+        std::uint8_t out[96] = {};
+        const auto out_span = [&] { return std::span<std::uint8_t, kSignatureLen>(out, kSignatureLen); };
+
+        std::cout << "\n[refusals] the group key the aggregator is bound to\n";
+        {
+            std::vector<std::uint8_t> identity(48, 0);
+            identity[0] = 0xC0;
+            const std::vector<std::uint8_t> zeros(48, 0);
+            const std::vector<std::uint8_t> garbage(48, 0xAB);
+            const auto ctor_throws = [&](const std::vector<std::uint8_t>& k, const std::string& what) {
+                bool threw = false;
+                try { WitnessAggregator a(pk_of(k)); } catch (const std::invalid_argument&) { threw = true; }
+                check(threw, what);
+            };
+            ctor_throws(identity, "the identity group key is refused at construction");
+            ctor_throws(zeros, "and so is the all-zero encoding of it");
+            ctor_throws(garbage, "a group key that is not a curve point is refused");
+            ctor_throws(off_subgroup_g1(),
+                        "a curve point outside the prime-order subgroup is refused");
+
+            // The identity test is a PREFIX test. A key that merely starts 0xC0 is
+            // not the identity and must fall through to the real decode, or an
+            // eighth of the encoding space would be refused as the zero key.
+            std::vector<std::uint8_t> c0_prefixed(48, 0);
+            c0_prefixed[0] = 0xC0;
+            c0_prefixed[47] = 0x01;
+            bool threw = false;
+            try { WitnessAggregator a(pk_of(c0_prefixed)); } catch (const std::invalid_argument& e) {
+                threw = true;
+                check(std::string(e.what()).find("identity") == std::string::npos,
+                      "a 0xC0-prefixed non-identity key is not mistaken for the identity");
+            }
+            check(threw, "…it is refused on its own merits — these bytes are not a point");
+        }
+
+        std::cout << "\n[refusals] the share buffer\n";
+        {
+            std::vector<std::uint8_t> packed;
+            pack_share(packed, 0, single.sig);
+            WitnessAggregator agg(pk_of(single.group_key));
+
+            check(agg.aggregate(std::span<const std::uint8_t>(packed.data(), packed.size()), 1,
+                                out_span()) == Status::Ok,
+                  "one well-formed share aggregates — every refusal below is one edit from it");
+            check(agg.aggregate(std::span<const std::uint8_t>(packed.data(), packed.size()), 0,
+                                out_span()) == Status::ErrInvalid,
+                  "aggregating nothing is an invalid call, not an empty signature");
+            check(agg.aggregate(std::span<const std::uint8_t>(packed.data(), packed.size()), 2,
+                                out_span()) == Status::ErrInvalid,
+                  "a count that does not match the buffer is refused before it is read past");
+            check(agg.aggregate(std::span<const std::uint8_t>(packed.data(), packed.size() - 1), 1,
+                                out_span()) == Status::ErrInvalid,
+                  "and a share record one byte short likewise");
+
+            // The second clause: a point that decompresses but is not in G2. Adding
+            // it would put a component of unknown order into the sum.
+            std::vector<std::uint8_t> off_packed;
+            pack_share(off_packed, 7, off_subgroup_g2());
+            check(agg.aggregate(std::span<const std::uint8_t>(off_packed.data(), off_packed.size()), 1,
+                                out_span()) == Status::ErrSignature,
+                  "an on-curve share outside G2 is refused, not summed");
+
+            // Two shares, the second bad: the aggregator must refuse the WHOLE
+            // aggregate rather than return the partial sum it had built.
+            std::vector<std::uint8_t> mixed;
+            pack_share(mixed, 0, single.sig);
+            pack_share(mixed, 1, std::vector<std::uint8_t>(96, 0xCD));
+            check(agg.aggregate(std::span<const std::uint8_t>(mixed.data(), mixed.size()), 2,
+                                out_span()) == Status::ErrSignature,
+                  "one bad share among good ones refuses the whole aggregate");
+
+            // Two GOOD shares: the sum path, which the n=1 case never takes. The
+            // result must be a point in its own right — an aggregate that is not on
+            // the curve is one no verifier can ever accept — and it must depend on
+            // BOTH shares, which is the whole difference between summing and
+            // returning the first one.
+            std::vector<std::uint8_t> two;
+            pack_share(two, 0, single.sig);
+            pack_share(two, 1, three.sig);
+            check(agg.aggregate(std::span<const std::uint8_t>(two.data(), two.size()), 2,
+                                out_span()) == Status::Ok,
+                  "two well-formed shares aggregate");
+            check(std::memcmp(out, single.sig.data(), 96) != 0 &&
+                      std::memcmp(out, three.sig.data(), 96) != 0,
+                  "…into a point that is neither of them — the shares are SUMMED, not picked");
+            {
+                blst_p2_affine a;
+                check(blst_p2_uncompress(&a, out) == BLST_SUCCESS && blst_p2_affine_in_g2(&a),
+                      "…and the sum is itself a point of G2");
+            }
+            // Order must not matter: point addition is commutative, and two nodes
+            // collecting the same shares in different orders must produce the same
+            // aggregate or the certificate they build is not the same certificate.
+            std::vector<std::uint8_t> swapped;
+            pack_share(swapped, 1, three.sig);
+            pack_share(swapped, 0, single.sig);
+            std::uint8_t out2[96] = {};
+            check(agg.aggregate(std::span<const std::uint8_t>(swapped.data(), swapped.size()), 2,
+                                std::span<std::uint8_t, kSignatureLen>(out2, kSignatureLen)) ==
+                      Status::Ok &&
+                      std::memcmp(out, out2, 96) == 0,
+                  "…and the same shares in the other order give the same aggregate");
+        }
+
+        std::cout << "\n[refusals] a moved-from aggregator is inert\n";
+        {
+            std::vector<std::uint8_t> packed;
+            pack_share(packed, 0, single.sig);
+            const auto shares = [&] { return std::span<const std::uint8_t>(packed.data(), packed.size()); };
+
+            WitnessAggregator a(pk_of(single.group_key));
+            check(a.backend() == Backend::Cpu, "aggregation runs on the CPU backend");
+            WitnessAggregator b(std::move(a));
+            check(b.aggregate(shares(), 1, out_span()) == Status::Ok,
+                  "the moved-TO aggregator still aggregates");
+            check(a.aggregate(shares(), 1, out_span()) == Status::ErrInvalid,  // NOLINT
+                  "and the moved-FROM one answers ErrInvalid rather than reading freed memory");
+
+            WitnessAggregator c(pk_of(single.group_key));
+            c = std::move(b);
+            check(c.aggregate(shares(), 1, out_span()) == Status::Ok,
+                  "move-assignment carries the binding and frees the target's own");
+            check(b.aggregate(shares(), 1, out_span()) == Status::ErrInvalid,  // NOLINT
+                  "leaving the source inert");
+
+            // Self-move: without the `this != &other` guard the assignment frees
+            // its own binding and then adopts the freed pointer. Routed through a
+            // pointer because a syntactic self-move is a compiler diagnostic, and
+            // it is the runtime behaviour that has to hold.
+            WitnessAggregator* same = &c;
+            c = std::move(*same);
+            check(c.aggregate(shares(), 1, out_span()) == Status::Ok,
+                  "an aggregator moved onto itself still holds its own binding");
+        }
+
+        std::cout << "\n[refusals] the C ABI\n";
+        {
+            std::vector<std::uint8_t> packed;
+            pack_share(packed, 0, single.sig);
+            const std::uint8_t* pk = single.group_key.data();
+            const std::uint8_t* sh = packed.data();
+
+            check(lux_quasar_witness_aggregate(pk, 48, sh, 1, out) == LUX_QUASAR_OK,
+                  "the ABI aggregates one share");
+            check(std::memcmp(out, single.sig.data(), 96) == 0,
+                  "and n=1 through the ABI is the same byte-identical copy");
+            check(lux_quasar_witness_aggregate(nullptr, 48, sh, 1, out) == LUX_QUASAR_ERR_INVALID,
+                  "a null group key is an invalid argument");
+            check(lux_quasar_witness_aggregate(pk, 48, nullptr, 1, out) == LUX_QUASAR_ERR_INVALID,
+                  "and so is a null share buffer");
+            check(lux_quasar_witness_aggregate(pk, 48, sh, 1, nullptr) == LUX_QUASAR_ERR_INVALID,
+                  "and a null output buffer");
+            check(lux_quasar_witness_aggregate(pk, 47, sh, 1, out) == LUX_QUASAR_ERR_INVALID,
+                  "a group key of the wrong width is refused before it is read");
+            check(lux_quasar_witness_aggregate(pk, 48, sh, 0, out) == LUX_QUASAR_ERR_INVALID,
+                  "aggregating zero shares is refused rather than returning an empty point");
+
+            // The ABI must not let a construction failure escape as an exception
+            // into C. A group key that cannot be bound comes back as ErrSig.
+            std::vector<std::uint8_t> identity(48, 0);
+            identity[0] = 0xC0;
+            check(lux_quasar_witness_aggregate(identity.data(), 48, sh, 1, out) == LUX_QUASAR_ERR_SIG,
+                  "an unbindable group key crosses the ABI as a status, never as an exception");
+        }
+    }
+    failures += g_fail;
 
     std::cout << "\n" << failures << " failures\n";
     return failures == 0 ? 0 : 1;
