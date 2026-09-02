@@ -153,6 +153,17 @@ int main() {
         check(e.signer_floor(Tier::Quasar) == signer_floor(Tier::Quasar, 4) &&
                   e.signer_floor(Tier::Nova) == signer_floor(Tier::Nova, 4),
               "the aggregate engine reads the SAME definition the portable certificate does");
+
+        // A tier byte that is neither rung has no floor and must get none. It used
+        // to fall through to Nova's — the accept rung's bar handed to a rung that
+        // does not exist — where Go and Rust both answer zero and every caller reads
+        // zero as a refusal.
+        bool unknown_ok = true;
+        for (std::uint32_t n = 1; n <= 64; ++n)
+            for (std::uint8_t t : {std::uint8_t{0}, std::uint8_t{1}, std::uint8_t{4},
+                                   std::uint8_t{255}})
+                unknown_ok = unknown_ok && signer_floor(static_cast<Tier>(t), n) == 0;
+        check(unknown_ok, "a rung that is not nova or quasar derives no floor at all");
     }
 
     // ── the portable certificate is weighed, not merely parsed ───────────────

@@ -112,7 +112,17 @@ std::uint32_t signer_floor(Tier tier, std::uint32_t n) noexcept {
     // a certificate must carry two thirds of the parties AND two thirds of the
     // weight. Reading only stake makes "supermajority" mean one signature wherever
     // the weight is concentrated in one validator.
-    return tier == Tier::Quasar ? two_thirds_count(n) : nova_signer_floor(n);
+    //
+    // A rung that is not an accept tier has no floor, so it gets none: 0, which
+    // every caller reads as a refusal. Answering Nova's floor for a tier byte that
+    // is neither would hand an unknown rung the accept rung's bar — the one place
+    // a `switch` says something a ternary cannot. Go's chain.SignerFloor, Rust's
+    // finality::signer_floor.
+    switch (tier) {
+        case Tier::Nova:   return nova_signer_floor(n);
+        case Tier::Quasar: return two_thirds_count(n);
+    }
+    return 0;
 }
 
 std::uint32_t QuorumCertEngine::signer_floor(Tier tier) const noexcept {

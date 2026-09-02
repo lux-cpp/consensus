@@ -103,6 +103,9 @@ enum class Tier : std::uint8_t {
 //            stay reachable on a small chain, and it is reorgable.
 //   Quasar → two_thirds_count(n), the export supermajority read in seats — the same
 //            supermajority the stake clause reads in weight.
+//
+// A rung that is not one of those two has no floor and gets none: 0, which every
+// caller reads as a refusal.
 [[nodiscard]] std::uint32_t signer_floor(Tier tier, std::uint32_t n) noexcept;
 
 // A validator is a distinct {public key, voting stake}. Stake must be > 0 for an
