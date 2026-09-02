@@ -181,13 +181,12 @@ int main() {
     // Every party decides over set.weights() and nothing else, so no party can
     // count a key the door did not prove.
     std::printf("\n[2] every party runs on that set, and the mesh finalizes\n");
-    const WaveConfig      wave  = WaveConfig::feasible(kN);
-    const std::uint32_t   alpha = equal_stake_supermajority(kN);
+    const WaveConfig      wave = WaveConfig::feasible(kN);
     Bus                   bus;
     std::vector<std::unique_ptr<Party>> parties;
     for (std::uint32_t i = 0; i < kN; ++i)
         parties.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set.weights(),
-                                                  alpha, wave, bus));
+                                                  wave, bus));
     for (auto& p : parties) bus.subs.push_back(p.get());
 
     const VotePosition pos = make_pos(0x5C, 9);

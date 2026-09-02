@@ -74,14 +74,9 @@ std::vector<std::uint8_t> canonical_vote_message(const VotePosition& pos, bool a
     return buf;
 }
 
-QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators, std::uint32_t alpha)
-    : total_stake_(0), alpha_(alpha) {
+QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators) : total_stake_(0) {
     if (validators.empty())
         throw std::invalid_argument("consensus: empty validator set");
-    if (alpha == 0)
-        throw std::invalid_argument("consensus: alpha (distinct-voter floor) is zero");
-    if (alpha > validators.size())
-        throw std::invalid_argument("consensus: alpha exceeds validator count — quorum unreachable");
 
     for (const auto& v : validators) {
         if (v.stake == 0)
@@ -97,7 +92,13 @@ QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators, std::uint3
 }
 
 std::uint32_t QuorumCertEngine::signer_floor(Tier tier) const noexcept {
-    return tier == Tier::Quasar ? alpha_ : nova_signer_floor(validator_count());
+    // Both derived from the live set, neither configured. The export floor is the
+    // supermajority in seats — the same one the stake floor below asks for in
+    // stake — so a certificate must carry two thirds of the parties AND two thirds
+    // of the weight. Reading only stake makes "supermajority" mean one signature
+    // wherever the weight is concentrated in one validator.
+    return tier == Tier::Quasar ? two_thirds_count(validator_count())
+                                : nova_signer_floor(validator_count());
 }
 
 std::uint64_t QuorumCertEngine::stake_floor(Tier tier) const noexcept {

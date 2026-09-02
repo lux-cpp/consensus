@@ -409,7 +409,7 @@ int main() {
               "no registrations admit to an empty set, as in Go");
         bool refused = false;
         try {
-            QuorumCertEngine empty(set.weights(), 1);
+            QuorumCertEngine empty(set.weights());
             (void)empty;
         } catch (const std::invalid_argument&) {
             refused = true;
@@ -498,7 +498,7 @@ int main() {
         check(bool(ok), "four proven validators are admitted");
 
         // The gate, constructed over nothing but the admitted set.
-        QuorumCertEngine engine(set.weights(), equal_stake_supermajority(4));
+        QuorumCertEngine engine(set.weights());
         check(engine.validator_count() == 4 && engine.total_stake() == set.total_weight,
               "the gate is constructed over the admitted set and agrees on the total");
 

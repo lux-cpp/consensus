@@ -63,7 +63,6 @@ public:
           const std::array<std::uint8_t, 32> & sk,
           const PubKey & pk,
           std::vector<Validator> validator_set,
-          std::uint32_t alpha,
           WaveConfig wave_cfg,
           VoteTransport & tx);
 

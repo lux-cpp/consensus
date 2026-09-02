@@ -16,7 +16,7 @@ WaveConfig WaveConfig::feasible(std::uint32_t n) noexcept {
     // The count itself, from threshold.hpp — Go's equal-stake strict-⅔ rule.
     // Carried as the count, so there is no ratio to recover it from and nothing
     // to round.
-    cfg.threshold = equal_stake_supermajority(cfg.k);
+    cfg.threshold = two_thirds_count(cfg.k);
     cfg.beta  = kFeasibleBeta;
     return cfg;
 }

@@ -83,7 +83,7 @@ int main() {
     // ── [1] WINDOW OPEN: no EARLY acceptance — a vote before submit is rejected ──
     {
         const int b = g_fail;
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x41, 10, 1);
         // The position is NOT yet opened. A perfectly valid signature is rejected.
         check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::RejectedNoSuchBlock,
@@ -104,7 +104,7 @@ int main() {
     //   finalizes and no stale candidate survives.
     {
         const int b = g_fail;
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P  = make_pos(0x42, 20, 1);   // the open position
         e.submit(P);
         // Four in-set validators each sign a DIFFERENT canonical position and offer
@@ -130,7 +130,7 @@ int main() {
     // ── [3] the standard's full rejection set in one place — ALL fail ────────────
     {
         const int b = g_fail;
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x43, 30, 1);
         e.submit(P);
 
@@ -167,7 +167,7 @@ int main() {
     //        and never cross-contaminates the first block's tally ─────────────────
     {
         const int b = g_fail;
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P1 = make_pos(0x44, 40, 1);  // first opened block
         const VotePosition P2 = make_pos(0x45, 40, 1);  // substitute at the same height
         e.submit(P1);

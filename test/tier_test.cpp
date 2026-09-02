@@ -5,11 +5,16 @@
 //
 // Go has two, and they are not interchangeable (engine/chain VerifyWeighted):
 //
-//   Nova   — voters ≥ NovaSignerFloor(n), stake > floor(total/2). Local
+//   Nova   — voters ≥ nova_signer_floor(n), stake > floor(total/2). Local
 //            execution. Crash-fault-safe by majority intersection, reorgable,
 //            and deliberately NOT Byzantine-safe. Authorizes no export.
-//   Quasar — voters ≥ α, stake > floor(2·total/3). The export rung a bridge,
-//            DEX settlement or cross-chain consumer admits on.
+//   Quasar — voters ≥ two_thirds_count(n), stake > floor(2·total/3). The export
+//            rung a bridge, DEX settlement or cross-chain consumer admits on.
+//
+// Both floors of both rungs come from the live SET. Neither is configured, and
+// the export one used to be: it was the engine's alpha constructor parameter,
+// which made the number of parties export finality reports a value the operator
+// picks — and at alpha = 1 it reports one.
 //
 // The properties under test are the ones a second rung can get wrong:
 //   1. Nova ignites where Quasar does not — the rungs are genuinely distinct.
@@ -17,12 +22,14 @@
 //      on the ⅔ clause, because the verifier re-derives the floor from the live
 //      set instead of reading the cert's own claim.
 //   3. Relabelling DOWNWARD only under-claims, and is therefore accepted.
-//   4. The signer floor is an INDEPENDENT guard: one validator holding a stake
-//      majority must not self-ignite Nova on its own signature.
+//   4. The signer floor is an INDEPENDENT guard at BOTH rungs: one validator
+//      holding a stake majority must not self-ignite Nova on its own signature,
+//      and one holding two thirds must not export on it either.
 //   5. Fail-closed everywhere a floor cannot be asserted.
 
 #include "lux/consensus/bls.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/threshold.hpp"
 
 #include <array>
 #include <cstdint>
@@ -87,7 +94,7 @@ int main() {
     {
         std::vector<Validator> set;
         for (const Key& k : keys) set.push_back({k.pk, 20});
-        QuorumCertEngine e(set, /*alpha=*/4);
+        QuorumCertEngine e(set);
 
         check(e.signer_floor(Tier::Nova) == 3 && e.stake_floor(Tier::Nova) == 50,
               "Nova floors are 3 signers / >50 stake");
@@ -152,7 +159,7 @@ int main() {
         const std::uint64_t stakes[5] = {70, 10, 10, 5, 5};
         std::vector<Validator> set;
         for (std::size_t i = 0; i < keys.size(); ++i) set.push_back({keys[i].pk, stakes[i]});
-        QuorumCertEngine e(set, /*alpha=*/4);
+        QuorumCertEngine e(set);
 
         const VotePosition P = make_pos(0x42, 11);
         e.submit(P);
@@ -166,7 +173,7 @@ int main() {
         check(!e.is_final(P.block_id, Tier::Nova), "2 signers: still below the floor of 3");
         (void)e.record_vote(P.block_id, keys[2].pk, sign_vote(keys[2], P));
         check(e.is_final(P.block_id, Tier::Nova), "3 signers / 90 stake: NOVA final");
-        check(!e.is_final(P.block_id, Tier::Quasar), "…but 3 signers is below α, so no export");
+        check(!e.is_final(P.block_id, Tier::Quasar), "…but 3 signers is below the export floor of 4, so no export");
     }
 
     // ── [5] fail-closed ─────────────────────────────────────────────────────
@@ -174,7 +181,7 @@ int main() {
     {
         std::vector<Validator> set;
         for (const Key& k : keys) set.push_back({k.pk, 20});
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         BlockId unknown{};
         unknown.fill(0xEE);
         check(!e.is_final(unknown, Tier::Nova) && !e.is_final(unknown, Tier::Quasar),
@@ -192,6 +199,66 @@ int main() {
             bogus.tier = static_cast<Tier>(4);  // Go's Horizon — not an attestable rung here
             check(!e.verify_cert(bogus), "an unknown tier fails closed");
         }
+    }
+
+    // ── [6] the EXPORT signer floor, derived and not configured ─────────────
+    // One holder of a hundred of a hundred and four signs alone. It clears the
+    // export STAKE floor several times over — floor(2·104/3) = 69 — so a rung
+    // that read only stake would export a certificate one key produced, and
+    // "Byzantine supermajority" would be a statement about one operator.
+    std::printf("\n[6] a lone holder of ⅔ of the stake cannot export\n");
+    {
+        std::vector<Validator> set;
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            set.push_back({keys[i].pk, i == 0 ? std::uint64_t(100) : std::uint64_t(1)});
+        QuorumCertEngine e(set);
+
+        check(e.total_stake() == 104 && e.stake_floor(Tier::Quasar) == 69,
+              "the set is 104 staked and the export stake floor is 69");
+        check(e.signer_floor(Tier::Quasar) == two_thirds_count(5) && e.signer_floor(Tier::Quasar) == 4,
+              "the export signer floor is derived from the set: floor(2·5/3)+1 = 4");
+
+        const VotePosition P = make_pos(0x61, 21);
+        e.submit(P);
+        (void)e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P));
+        check(e.voted_stake(P.block_id) == 100, "the whale alone carries 100 of 104");
+        check(!e.is_final(P.block_id, Tier::Quasar),
+              "one signer holding ⅔ of the stake is NOT export-final — the count refuses it");
+        check(!e.assemble_cert(P.block_id, Tier::Quasar).has_value(),
+              "and no export certificate assembles from it");
+
+        // Two more minimum registrations: still one short of four.
+        for (int i = 1; i <= 2; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
+        check(!e.is_final(P.block_id, Tier::Quasar), "three of five is still below the floor");
+
+        // At the floor the same stake carries — the count was the binding clause.
+        (void)e.record_vote(P.block_id, keys[3].pk, sign_vote(keys[3], P));
+        check(e.is_final(P.block_id, Tier::Quasar),
+              "four distinct signers holding 103 of 104 export");
+        const auto cert = e.assemble_cert(P.block_id, Tier::Quasar);
+        check(cert.has_value() && cert->threshold == 4 && cert->voters.size() == 4,
+              "the certificate declares the derived floor, and carries it");
+        check(cert.has_value() && e.verify_cert(*cert), "and it re-verifies against the set");
+    }
+
+    // ── [7] the count alone does not export either ──────────────────────────
+    // The mirror: four LIGHT signers meet the count floor exactly and hold four
+    // of a hundred and four. Neither half of the rule is sufficient alone.
+    std::printf("\n[7] meeting the count without the stake does not export\n");
+    {
+        std::vector<Validator> set;
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            set.push_back({keys[i].pk, i == 0 ? std::uint64_t(100) : std::uint64_t(1)});
+        QuorumCertEngine e(set);
+
+        const VotePosition P = make_pos(0x71, 22);
+        e.submit(P);
+        for (std::size_t i = 1; i < keys.size(); ++i)
+            (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
+        check(e.distinct_voters(P.block_id) == 4 && e.voted_stake(P.block_id) == 4,
+              "four distinct signers carrying four of 104");
+        check(!e.is_final(P.block_id, Tier::Quasar),
+              "the count floor is met and the stake floor is not — refused");
     }
 
     std::printf("\n--------------------------------------------------------------------------------\n");
