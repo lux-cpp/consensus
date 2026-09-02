@@ -42,7 +42,7 @@ struct WaveConfig {
     // 28, 28/41 is not representable, and ceil(41 · 0.6829268292682927) is 29.
     // A round sitting at exactly 28/41 then never decides. There is no rounding
     // mode that fixes this, because the ratio has already lost the answer.
-    std::uint32_t threshold = equal_stake_supermajority(21);
+    std::uint32_t threshold = two_thirds_count(21);
     std::uint32_t beta = kFeasibleBeta;         // consecutive rounds required to decide
 
     // The parameter set a live network of n validators runs — Go

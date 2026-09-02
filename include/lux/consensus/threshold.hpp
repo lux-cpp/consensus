@@ -39,10 +39,18 @@ inline constexpr std::uint32_t kMinBFTCommittee = 4;
 // rests on, while only Quasar's ⅔ is Byzantine-safe.
 [[nodiscard]] std::uint64_t half_stake_floor(std::uint64_t total) noexcept;
 
-// The smallest vote count that can strictly exceed ⅔ of n equal weights —
-// floor(2n/3)+1. Go config.EqualStakeSupermajorityThreshold. n=5→4, n=11→8,
-// n=21→15 (15, not 14: 14/21 does NOT strictly exceed ⅔).
-[[nodiscard]] std::uint32_t equal_stake_supermajority(std::uint32_t n) noexcept;
+// The ⅔ SUPERMAJORITY COUNT of n — the smallest number of seats strictly more
+// than two thirds of them, floor(2n/3)+1. Go config.TwoThirdsCount. n=5→4,
+// n=11→8, n=21→15 (15, not 14: 14/21 does NOT strictly exceed ⅔), n=41→28.
+//
+// Two consumers, one rule from two sides: the WAVE sizes its per-round threshold
+// to it, and the GATE demands this many DISTINCT signers on a Quasar (export)
+// certificate whatever the stake distribution. That count is the guard the stake
+// predicate cannot give — two thirds of the stake is one signature wherever two
+// thirds of the stake is one validator, and a certificate one key can mint is not
+// a Byzantine supermajority. It is derived from two_thirds_stake_floor over n unit
+// weights rather than restated, so the count and the stake predicate cannot drift.
+[[nodiscard]] std::uint32_t two_thirds_count(std::uint32_t n) noexcept;
 
 // ⌊n/2⌋+1 — Go engine/chain.NovaQuorum. n<1 → 1 (never 0, which would let a
 // transiently-empty validator view self-accept).

@@ -16,8 +16,8 @@
 //                          rejects. Pinned by pinning bls.Sign's output.
 //   3. THE STAKE FLOORS  — config.TwoThirdsStakeFloor / HalfStakeFloor, to
 //                          MaxUint64.
-//   4. THE COMMITTEE     — NovaQuorum, NovaSignerFloor,
-//                          EqualStakeSupermajorityThreshold, AlphaForK (ceil).
+//   4. THE COMMITTEE     — NovaQuorum, NovaSignerFloor, TwoThirdsCount,
+//                          AlphaForK (ceil).
 
 #include "lux/consensus/bls.hpp"
 #include "lux/consensus/cert.hpp"
@@ -274,14 +274,13 @@ void stake_floor() {
 
 // ── 4. the committee thresholds ──────────────────────────────────────────────
 void committee() {
-    banner("committee — NovaQuorum / NovaSignerFloor / EqualStakeSupermajority / AlphaForK");
+    banner("committee — NovaQuorum / NovaSignerFloor / TwoThirdsCount / AlphaForK");
     for (const Row& r : load("committee.json")) {
         const auto n = static_cast<std::uint32_t>(u64(r, "n"));
         const std::string at = "(n=" + field(r, "n") + ")";
         check(nova_quorum(n) == u64(r, "nova_quorum"), "nova_quorum" + at);
         check(nova_signer_floor(n) == u64(r, "nova_signer_floor"), "nova_signer_floor" + at);
-        check(equal_stake_supermajority(n) == u64(r, "equal_stake_supermajority"),
-              "equal_stake_supermajority" + at);
+        check(two_thirds_count(n) == u64(r, "two_thirds_count"), "two_thirds_count" + at);
         // The truncation bug lived exactly here: trunc(21·0.69)=14 where Go
         // declares 15. ceil, and only ceil, reproduces the corpus.
         check(static_cast<std::uint64_t>(alpha_threshold(n, kConsensusSuperMajority)) ==
@@ -299,7 +298,7 @@ void committee() {
         std::uint32_t diverged = 0, first = 0;
         for (std::uint32_t n = 4; n <= 1000; ++n) {
             const WaveConfig cfg = WaveConfig::feasible(n);
-            if (cfg.k != n || cfg.threshold != equal_stake_supermajority(n)) {
+            if (cfg.k != n || cfg.threshold != two_thirds_count(n)) {
                 if (diverged == 0) first = n;
                 ++diverged;
             }
@@ -492,12 +491,20 @@ void cert_shapes() {
 // certificate carries and the rung it attests; Go recorded what its predicate
 // decided, and this must decide the same.
 //
-// The engine is constructed with alpha = 1 deliberately. Quasar's distinct-voter
-// floor here is alpha, and Go's export rung carries NO signer floor of its own —
-// only the stake floor. alpha = 1 is the smallest legal value and it can never
-// bind (a row with one signer already fails the stake clause), so the C++ gate
-// asks exactly Go's question. Any larger alpha would silently add a clause Go
-// does not have.
+// The engine is constructed from the validator set and NOTHING ELSE. Both tiers'
+// distinct-voter floors are derived from that set, so the gate this harness drives
+// is the gate a node runs — which is the whole point, and was the hole.
+//
+// This harness used to pass alpha = 1: the export floor was a constructor
+// parameter then, and the reasoning was that the smallest legal value could never
+// bind, so the C++ gate would ask exactly Go's question. It was right about Go and
+// wrong about what a corpus is for. Go's export rung carried no count floor, C++'s
+// carried whichever one the operator configured, and a harness built at alpha = 1
+// is a harness that cannot see the difference — so the corpus reported agreement
+// between two implementations that would decide the whale case differently on any
+// real deployment, where alpha is floor(2n/3)+1 and not one. A conformance run
+// must exercise the shipped configuration or it is conforming a configuration
+// nothing runs.
 //
 // Signatures are real because they must be: the floors are checked before any
 // pairing, so a refusal needs no key material, but nothing reaches ACCEPT
@@ -536,10 +543,15 @@ void weighted_decision() {
         if (nodes.size() != n * kNodeLen || weights.size() != n * 8 || signers.size() != k * kNodeLen)
             die(name + ": the row's set is not " + std::to_string(n) + " entries wide");
 
-        // The count floor, conformed on its own: a set of this size demands this
-        // many distinct signers at Nova whatever the stake is.
-        check(nova_signer_floor(static_cast<std::uint32_t>(n)) == u64(r, "nova_signer_floor"),
-              name + ": nova signer floor matches Go");
+        // The RUNG's count floor, conformed on its own: a set of this size demands
+        // this many distinct signers at this rung whatever the stake is. Nova's
+        // saturates at three; Quasar's is the supermajority in seats and grows with
+        // the set, and it is the clause that refuses a whale signing alone.
+        const std::uint32_t want_floor =
+            (tier == Tier::Quasar) ? two_thirds_count(static_cast<std::uint32_t>(n))
+                                   : nova_signer_floor(static_cast<std::uint32_t>(n));
+        check(want_floor == u64(r, "signer_floor"),
+              name + ": the " + rung + " signer floor matches Go");
 
         // Seat the set: seat i holds the row's i-th weight under its own key.
         std::vector<Validator> vals;
@@ -553,10 +565,15 @@ void weighted_decision() {
             vals.push_back(Validator{keys[i].pk, w});
         }
 
-        QuorumCertEngine engine(vals, /*alpha=*/1);
+        QuorumCertEngine engine(vals);
         check(engine.total_stake() == u64(r, "total"), name + ": total stake matches Go");
         check(engine.stake_floor(tier) == u64(r, "stake_floor"),
               name + ": the " + rung + " stake floor matches Go");
+        // And the floor the ENGINE derives is the one the corpus recorded — so the
+        // decision below is reached through the same two numbers Go reached it by,
+        // not through a configured value that happens to agree.
+        check(engine.signer_floor(tier) == want_floor,
+              name + ": the engine derives the " + rung + " signer floor from the set");
 
         // One block, one position. The decision does not depend on it, which the
         // corpus states outright, so the harness carries no position material.

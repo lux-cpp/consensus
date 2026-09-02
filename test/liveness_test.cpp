@@ -28,6 +28,7 @@
 
 #include "lux/consensus/node.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/threshold.hpp"
 #include "lux/consensus/bls.hpp"
 
 #include <array>
@@ -79,9 +80,12 @@ struct Bus : VoteTransport {
 
 int main() {
     std::printf("===================== consensus — LIVENESS (route around faults) =====================\n");
-    std::printf("leaderless: any α distinct >2/3-stake voters finalize; a down/wedged node is routed around\n\n");
+    std::printf("leaderless: any floor(2n/3)+1 distinct >2/3-stake voters finalize; a down/wedged node is routed around\n\n");
 
-    constexpr std::uint32_t kN = 10, kAlpha = 7;
+    // The export count floor for ten seats, written out: floor(2*10/3)+1 = 7. The
+    // engine derives its own from the set; this is what it must come to.
+    constexpr std::uint32_t kN = 10, kExportFloor = 7;
+    check(two_thirds_count(kN) == kExportFloor, "the export floor for ten seats is seven");
     constexpr std::uint64_t kStake = 10;  // total 100, floor 66; 7 live=70 final, 6 live=60 stall
     std::vector<Key> keys;
     for (std::uint32_t i = 0; i < kN; ++i) keys.push_back(make_key(std::uint8_t(0xD0 + i)));
@@ -93,7 +97,7 @@ int main() {
     auto run_height = [&](std::vector<std::unique_ptr<Party>>& nodes, Bus& bus,
                           std::uint32_t live, const VotePosition& pos) {
         for (std::uint32_t i = 0; i < live; ++i)
-            nodes.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, kAlpha,
+            nodes.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set,
                                                    WaveConfig{5, 4, 4}, bus));
         for (auto& n : nodes) bus.subs.push_back(n.get());
         for (auto& n : nodes) n->submit(pos);

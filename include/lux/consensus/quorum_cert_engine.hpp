@@ -13,8 +13,13 @@
 //
 //     Nova   (local execution) — voters ≥ nova_signer_floor(n)
 //                                stake  > half_stake_floor(total)
-//     Quasar (export)          — voters ≥ α
+//     Quasar (export)          — voters ≥ two_thirds_count(n)
 //                                stake  > two_thirds_stake_floor(total)
+//
+//   BOTH floors of a rung are derived from the live set. Neither is configured,
+//   because a distinct-voter floor an operator can set is a security parameter
+//   chosen by the party it constrains: set to 1 it puts export finality back
+//   within reach of a single holder of two thirds of the stake.
 //
 //   Nova is crash-fault-safe and reorgable; only Quasar authorizes export
 //   (bridges, DEX settlement, cross-chain). Go engine/chain VerifyWeighted.
@@ -186,11 +191,14 @@ struct QuorumCert {
 // rotation constructs a fresh engine, mirroring Go's NewVerifier discipline).
 class QuorumCertEngine {
 public:
-    // Construct with a validator set and the Quasar distinct-voter floor α. Fail
-    // loud at the system boundary (throws std::invalid_argument) on
-    // misconfiguration: empty set, α == 0, α > validator count (unreachable
-    // quorum), a duplicate pubkey, or an in-set validator with 0 stake.
-    QuorumCertEngine(std::vector<Validator> validators, std::uint32_t alpha);
+    // Construct with a validator set. Both tiers' distinct-voter floors are derived
+    // from that set — nova_signer_floor(n) and two_thirds_count(n) — so there is no
+    // quorum parameter to configure and none to get wrong. Fail loud at the system
+    // boundary (throws std::invalid_argument) on a set that cannot be weighed:
+    // empty, a duplicate pubkey, an in-set validator with 0 stake, or a total that
+    // does not fit. floor(2n/3)+1 ≤ n for every n ≥ 1, so the export quorum is
+    // reachable on any set that constructs.
+    explicit QuorumCertEngine(std::vector<Validator> validators);
 
     // Register a pending block to collect votes for. Returns false if a block with
     // this id is already pending (idempotent guard).
@@ -210,8 +218,9 @@ public:
 
     // THE GATE. true IFF (total_stake>0) AND a BLS check covering every counted
     // voter has passed AND (distinct voters ≥ the tier's signer floor) AND
-    // (summed stake > the tier's stake floor). No force-accept, no k==1, no
-    // count-only path; fail-closed on a missing block or zero total stake.
+    // (summed stake > the tier's stake floor). Both floors, always: neither half
+    // is sufficient alone. No force-accept, no k==1, no count-only path;
+    // fail-closed on a missing block or zero total stake.
     [[nodiscard]] bool is_final(const BlockId& block_id, Tier tier = Tier::Quasar) const;
 
     // Assemble the portable witness for a block final AT `tier` (else nullopt).
@@ -233,7 +242,6 @@ public:
     bool drop(const BlockId& block_id);
 
     // ── Introspection (tests / observability)
-    [[nodiscard]] std::uint32_t alpha() const noexcept { return alpha_; }
     [[nodiscard]] std::uint64_t total_stake() const noexcept { return total_stake_; }
     [[nodiscard]] std::uint32_t validator_count() const noexcept {
         return static_cast<std::uint32_t>(validators_.size());
@@ -288,7 +296,6 @@ private:
 
     std::map<PubKey, std::uint64_t> validators_;   // pubkey → stake (sorted, distinct)
     std::uint64_t                   total_stake_;   // Σ in-set stake
-    std::uint32_t                   alpha_;         // Quasar distinct-voter floor
     // mutable: the gate VERIFIES on demand (verify_tally memoizes into Pending), so
     // is_final/assemble_cert stay logically const observations while doing the one
     // pairing the answer needs. All access is under mu_.
@@ -296,7 +303,7 @@ private:
 
     // Serializes all access to mutable pending_ state. The production gossip mesh
     // delivers votes from multiple reader threads (one per peer); without this the
-    // receive path is a data race. validators_/total_stake_/alpha_ are immutable
+    // receive path is a data race. validators_ and total_stake_ are immutable
     // after construction, so verify_cert reads them lock-free.
     mutable std::mutex mu_;
 };

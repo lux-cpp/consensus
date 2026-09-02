@@ -19,6 +19,11 @@
 // cert_verify.json uses for its sets: a weight is 8 bytes big-endian, a node id
 // is 20. A weight near 2^64 must never pass through a double, and the reader
 // keeps every value as literal text for exactly that reason.
+//
+// signer_floor is the RUNG's, not Nova's. Both rungs carry one — Nova's saturates
+// at three and Quasar's is the export supermajority in seats — so a column that
+// always reported Nova's would be telling the C++ gate the wrong number about the
+// clause a Quasar row can now fail.
 package main
 
 import (
@@ -50,20 +55,20 @@ func decisions() []map[string]any {
 		}
 
 		rows = append(rows, map[string]any{
-			"name":              c.Name,
-			"rung":              c.Rung,
-			"epoch":             v.Epoch,
-			"set_size":          len(c.Set),
-			"nodes":             hex.EncodeToString(nodes),
-			"weights":           hex.EncodeToString(weights),
-			"signers":           hex.EncodeToString(signers),
-			"signer_count":      len(c.Signers),
-			"total":             c.Total,
-			"voted":             c.Voted,
-			"nova_signer_floor": c.SignerFloor,
-			"stake_floor":       c.StakeFloor,
-			"expect":            expect,
-			"refusal":           c.Refusal,
+			"name":         c.Name,
+			"rung":         c.Rung,
+			"epoch":        v.Epoch,
+			"set_size":     len(c.Set),
+			"nodes":        hex.EncodeToString(nodes),
+			"weights":      hex.EncodeToString(weights),
+			"signers":      hex.EncodeToString(signers),
+			"signer_count": len(c.Signers),
+			"total":        c.Total,
+			"voted":        c.Voted,
+			"signer_floor": c.SignerFloor,
+			"stake_floor":  c.StakeFloor,
+			"expect":       expect,
+			"refusal":      c.Refusal,
 		})
 	}
 	return rows

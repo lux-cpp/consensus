@@ -11,11 +11,10 @@ Party::Party(std::uint32_t index,
              const std::array<std::uint8_t, 32> & sk,
              const PubKey & pk,
              std::vector<Validator> validator_set,
-             std::uint32_t alpha,
              WaveConfig wave_cfg,
              VoteTransport & tx)
     : index_(index), sk_(sk), pk_(pk),
-      gate_(std::move(validator_set), alpha), wave_(wave_cfg), tx_(tx) {}
+      gate_(std::move(validator_set)), wave_(wave_cfg), tx_(tx) {}
 
 void Party::submit(const VotePosition & pos) { gate_.submit(pos); }
 
