@@ -121,7 +121,7 @@ int main() {
         ++checked;
     }
 
-    if (checked != 13) die("expected 13 frozen cases, checked " + std::to_string(checked));
+    if (checked != 14) die("expected 14 frozen cases, checked " + std::to_string(checked));
     std::printf("pop_conformance: %d cases match the Go oracle\n", checked);
     return 0;
 }
