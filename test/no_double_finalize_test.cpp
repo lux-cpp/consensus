@@ -47,6 +47,7 @@
 
 #include "lux/consensus/node.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
+#include "lux/consensus/threshold.hpp"
 #include "lux/consensus/bls.hpp"
 
 #include <array>
@@ -109,7 +110,11 @@ int main() {
     // 10 validators, stake 10 each → total 100, floor(2/3·100)=66, α=7.
     // 7 distinct voters (70) finalize; 6 (60) do not. Double-finalize needs
     // ≥ 2·7−10 = 4 equivocators (40 stake > ⌊100/3⌋=33) — exactly f ≥ ⌈n/3⌉.
-    constexpr std::uint32_t kN = 10, kAlpha = 7;
+    // kExportFloor is the EXPORT floor for this set, written out rather than computed so a
+    // change to the rule shows up here as a number: floor(2*10/3)+1 = 7. The engine
+    // derives its own from the set; this is what that derivation must come to.
+    constexpr std::uint32_t kN = 10, kExportFloor = 7;
+    check(two_thirds_count(kN) == kExportFloor, "the export floor for ten seats is seven");
     constexpr std::uint64_t kStake = 10;
     std::vector<Key> keys;
     for (std::uint32_t i = 0; i < kN; ++i) keys.push_back(make_key(std::uint8_t(0xC0 + i)));
@@ -127,7 +132,7 @@ int main() {
 
         // record a list of (key index, block) votes into a fresh engine, return it.
         auto run = [&](const std::vector<std::pair<std::uint32_t, const VotePosition*>>& votes) {
-            auto e = std::make_unique<QuorumCertEngine>(set, kAlpha);
+            auto e = std::make_unique<QuorumCertEngine>(set);
             e->submit(B1); e->submit(B2);
             for (auto& [ki, b] : votes)
                 (void)e->record_vote(b->block_id, keys[ki].pk, sign_vote(keys[ki], *b));
@@ -171,7 +176,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+        Party node(0, keys[0].sk, keys[0].pk, set, WaveConfig{5, 4, 4}, bus);
         bus.subs.push_back(&node);
         const VotePosition B1 = make_pos(0xB1, 9, 1);
         const VotePosition B2 = make_pos(0xB2, 9, 1);  // sibling: same (height,epoch)
@@ -198,7 +203,7 @@ int main() {
         Bus bus;
         std::vector<std::unique_ptr<Party>> honest;
         for (std::uint32_t i = 3; i < kN; ++i)
-            honest.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set, kAlpha,
+            honest.push_back(std::make_unique<Party>(i, keys[i].sk, keys[i].pk, set,
                                                     WaveConfig{5, 4, 4}, bus));
         for (auto& n : honest) bus.subs.push_back(n.get());
 
@@ -243,7 +248,7 @@ int main() {
         check(all_b1, "every honest node finalizes the single head B1");
         check(none_b2, "NO honest node finalizes the conflicting branch B2");
         check(certs_agree, "all honest nodes assemble the IDENTICAL verifying cert (single head)");
-        check(head.has_value() && head->voters.size() == kAlpha && head->voted_stake == kAlpha * kStake,
+        check(head.has_value() && head->voters.size() == kExportFloor && head->voted_stake == kExportFloor * kStake,
               "the head cert carries exactly 7 voters / 70 stake (4 honest + 3 Byzantine)");
         std::printf("[3/5] 10 nodes, 3 equivocators (f<n/3): exactly one head commits      => %s\n",
                     g_fail == b ? "PASS" : "FAIL");
@@ -260,7 +265,7 @@ int main() {
         // at one height, the fresh-net fatal.
         {
             Bus bus;
-            Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+            Party node(0, keys[0].sk, keys[0].pk, set, WaveConfig{5, 4, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition B1 = make_pos(0xB1, 9, 1);
             const VotePosition B2 = make_pos(0xB2, 9, 2);  // SAME height, DIFFERENT epoch
@@ -278,7 +283,7 @@ int main() {
         // durable decided-height gate. A higher OPEN height stays signable.
         {
             Bus bus;
-            Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+            Party node(0, keys[0].sk, keys[0].pk, set, WaveConfig{5, 4, 4}, bus);
             bus.subs.push_back(&node);
             const VotePosition A    = make_pos(0xA1, 20, 1);  // the winner at height 20
             const VotePosition Bsib = make_pos(0xB2, 20, 2);  // losing sibling at 20 (diff id+epoch)
@@ -328,7 +333,7 @@ int main() {
     {
         const int b = g_fail;
         Bus bus;
-        Party node(0, keys[0].sk, keys[0].pk, set, kAlpha, WaveConfig{5, 4, 4}, bus);
+        Party node(0, keys[0].sk, keys[0].pk, set, WaveConfig{5, 4, 4}, bus);
         bus.subs.push_back(&node);
 
         const VotePosition at7 = make_pos(0xA1, 7, 1);
@@ -348,7 +353,7 @@ int main() {
         check(bus.broadcasts.size() == 1 && bus.broadcasts[0].block_id == at7.block_id,
               "[5] the registered block is signed exactly once");
         {
-            QuorumCertEngine probe(set, kAlpha);
+            QuorumCertEngine probe(set);
             probe.submit(at7);
             check(probe.record_vote(at7.block_id, keys[0].pk, bus.broadcasts[0].sig) ==
                       VoteResult::Recorded,

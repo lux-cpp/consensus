@@ -18,13 +18,28 @@ their summed stake **strictly exceeds** that tier's stake floor:
 | tier | signers | stake | authorizes |
 |---|---|---|---|
 | **Nova** | ≥ `nova_signer_floor(n)` | > `floor(total/2)` | local execution (crash-safe, reorgable) |
-| **Quasar** | ≥ α | > `floor(2·total/3)` | export — bridges, DEX settlement, cross-chain |
+| **Quasar** | ≥ `two_thirds_count(n)` | > `floor(2·total/3)` | export — bridges, DEX settlement, cross-chain |
 
-Fail-closed: zero total stake, an unknown block, an unknown tier, or an empty set
-never finalize. There is **no** force-accept, no `k==1`, no count-only path.
-A cert cannot forge its tier upward — the verifier re-derives both floors from the
-live validator set instead of reading the cert's own claim, so a Nova set of votes
-relabelled Quasar dies on the ⅔ clause. Mirrors Go `QuorumCert.VerifyWeighted`.
+Both floors of both rungs are **derived from the live set**, never configured.
+`QuorumCertEngine` takes the validator set and nothing else. The export count floor
+used to be the `alpha` constructor parameter, which made the number of independent
+parties export finality reports a value the operator picks — and at `alpha = 1` it
+reports one, so a validator holding two thirds of the stake could mint an
+export-grade certificate on a single signature. `two_thirds_count(n)` =
+`floor(2n/3)+1` is the same supermajority the stake floor asks for, read in seats;
+Go's `config.TwoThirdsCount` and Rust's `two_thirds_count` are the same number.
+Neither half of a rung is sufficient alone.
+
+`alpha` survives only as the WAVE's per-round sampling ratio (`alpha_threshold(k,
+alpha)`, `kConsensusSuperMajority` = 0.69) — a different quantity that shares a
+letter and nothing else.
+
+Fail-closed: zero total stake, an unknown block, an unknown tier, an empty set, or
+an unresolved validator count never finalize. There is **no** force-accept, no
+`k==1`, no count-only path. A cert cannot forge its tier upward — the verifier
+re-derives both floors from the live validator set instead of reading the cert's own
+claim, so a Nova set of votes relabelled Quasar dies on the ⅔ clause. Mirrors Go
+`QuorumCert.VerifyWeighted`.
 
 ## Decomplected
 

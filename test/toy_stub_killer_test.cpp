@@ -99,13 +99,14 @@ int main() {
     std::puts("================ consensus seed — TOY-STUB-KILLER ================");
     std::puts("real BLS12-381 (cevm::crypto::bls, blst) | finality GATE only\n");
 
-    // ── Common fixture: 5 validators, stake 20 each (total 100), α = 4.
-    //    floor(2/3·100) = 66 ⇒ a quorum needs >66 stake AND ≥4 distinct voters.
+    // ── Common fixture: 5 validators, stake 20 each (total 100). floor(2/3·100)
+    //    = 66 and the export count floor is floor(2·5/3)+1 = 4, both DERIVED from
+    //    the set ⇒ an export quorum needs >66 stake AND ≥4 distinct voters.
     std::vector<Key> keys;
     for (std::uint8_t i = 0; i < 5; ++i) keys.push_back(make_key(std::uint8_t(0x10 + i)));
     std::vector<Validator> set;
     for (const auto& k : keys) set.push_back({k.pk, 20});
-    QuorumCertEngine engine(set, /*alpha=*/4);
+    QuorumCertEngine engine(set);
     check(engine.total_stake() == 100, "fixture total stake == 100");
     check(two_thirds_stake_floor(100) == 66, "floor(2/3*100) == 66 (matches Go)");
 
@@ -179,28 +180,34 @@ int main() {
         for (int i = 0; i < 3; ++i)
             (void)engine.record_vote(C.block_id, keys[i].pk, sign_vote(keys[i], C));
         s4 &= check(engine.distinct_voters(C.block_id) == 3, "3 distinct voters");
-        s4 &= check(engine.is_final(C.block_id) == false, "is_final(C) == false (3<α and 60<=66)");
+        s4 &= check(engine.is_final(C.block_id) == false,
+                    "is_final(C) == false (3 < the floor of 4, and 60<=66)");
 
         // 4b: SKEWED stake — count gate PASSES but stake gate FAILS. Isolates the
         //     stake supermajority as an independent, required gate (the HIGH-3 fix).
+        //     FOUR light voters, because four is what the export count floor asks
+        //     of five seats; with three the count would fail too and the row would
+        //     no longer isolate anything.
         std::vector<Key> sk_keys;
         for (std::uint8_t i = 0; i < 5; ++i) sk_keys.push_back(make_key(std::uint8_t(0x60 + i)));
         std::vector<Validator> skewed = {
             {sk_keys[0].pk, 10}, {sk_keys[1].pk, 10}, {sk_keys[2].pk, 10},
             {sk_keys[3].pk, 10}, {sk_keys[4].pk, 60},  // total 100, floor 66
         };
-        QuorumCertEngine skewed_engine(skewed, /*alpha=*/3);
+        QuorumCertEngine skewed_engine(skewed);
+        s4 &= check(skewed_engine.signer_floor(Tier::Quasar) == 4,
+                    "skewed: the export count floor for five seats is 4");
         const VotePosition D = make_pos(0x45, 103, 9);
         s4 &= check(skewed_engine.submit(D), "submit(D) on skewed engine");
-        for (int i = 0; i < 3; ++i)  // the 3 low-stake validators: count 3>=α, stake 30
+        for (int i = 0; i < 4; ++i)  // the 4 low-stake validators: they meet the count and not the stake
             (void)skewed_engine.record_vote(D.block_id, sk_keys[i].pk, sign_vote(sk_keys[i], D));
-        s4 &= check(skewed_engine.distinct_voters(D.block_id) == 3, "skewed: 3 distinct voters (count gate PASSES)");
-        s4 &= check(skewed_engine.voted_stake(D.block_id) == 30, "skewed: voted stake 30 (<=66)");
+        s4 &= check(skewed_engine.distinct_voters(D.block_id) == 4, "skewed: 4 distinct voters (count gate PASSES)");
+        s4 &= check(skewed_engine.voted_stake(D.block_id) == 40, "skewed: voted stake 40 (<=66)");
         s4 &= check(skewed_engine.is_final(D.block_id) == false,
-                    "skewed: is_final == false despite reaching α (stake gate independent)");
+                    "skewed: is_final == false despite meeting the count (stake gate independent)");
         // and adding the whale flips it final (sanity: the gate is not stuck-closed)
         (void)skewed_engine.record_vote(D.block_id, sk_keys[4].pk, sign_vote(sk_keys[4], D));
-        s4 &= check(skewed_engine.voted_stake(D.block_id) == 90, "skewed: +whale ⇒ stake 90 (>66)");
+        s4 &= check(skewed_engine.voted_stake(D.block_id) == 100, "skewed: +whale ⇒ stake 100 (>66)");
         s4 &= check(skewed_engine.is_final(D.block_id) == true, "skewed: now final with whale");
     }
     verdict(4, s4);

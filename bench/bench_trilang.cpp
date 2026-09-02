@@ -368,9 +368,9 @@ void BM_FastAggVerifyFromPoints(benchmark::State& st) {
 BENCHMARK(BM_FastAggVerifyFromPoints)->Arg(1)->Arg(4)->Arg(21)->Arg(41)->Arg(100);
 
 // ── the shipped gate, whole ─────────────────────────────────────────────────
-// QuorumCertEngine::verify_cert: the structural clauses, the recomputed stake
-// floor, and the O(1) aggregate pairing. The engine is built with alpha equal to
-// the committee size so the cert this builds clears its own floor.
+// QuorumCertEngine::verify_cert: the structural clauses, the recomputed stake and
+// count floors, and the O(1) aggregate pairing. The certificate carries the whole
+// committee, so it clears both floors and the pairing is what is being timed.
 void BM_EngineVerifyCert(benchmark::State& st) {
     const std::size_t n = std::size_t(st.range(0));
     const Committee c = committee(n);
@@ -378,14 +378,17 @@ void BM_EngineVerifyCert(benchmark::State& st) {
     std::vector<Validator> set;
     set.reserve(n);
     for (const auto& pk : c.pks) set.push_back(Validator{pk, kStakePer});
-    QuorumCertEngine engine(set, std::uint32_t(n));
+    QuorumCertEngine engine(set);
 
     QuorumCert cert{};
     cert.version       = kQuorumCertVersion;
     cert.type          = kQCFinality;
     cert.tier          = Tier::Quasar;
     cert.position      = c.pos;
-    cert.threshold     = std::uint32_t(n);
+    // The engine derives the export floor from the set, and verify_cert refuses a
+    // certificate whose declared threshold is not that number — so read it off the
+    // engine rather than restating it here.
+    cert.threshold     = engine.signer_floor(Tier::Quasar);
     cert.voters        = c.pks;
     cert.aggregate_sig = c.agg;
     cert.voted_stake   = kStakePer * n;

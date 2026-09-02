@@ -20,7 +20,7 @@ std::uint64_t two_thirds_stake_floor(std::uint64_t total) noexcept {
 
 std::uint64_t half_stake_floor(std::uint64_t total) noexcept { return total / 2; }
 
-std::uint32_t equal_stake_supermajority(std::uint32_t n) noexcept {
+std::uint32_t two_thirds_count(std::uint32_t n) noexcept {
     if (n == 0) return 1;
     return static_cast<std::uint32_t>(two_thirds_stake_floor(n)) + 1;
 }
