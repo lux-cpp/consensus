@@ -3,7 +3,7 @@ module github.com/luxcpp/consensus/oracle
 go 1.26.4
 
 require (
-	github.com/luxfi/consensus v1.36.2
+	github.com/luxfi/consensus v1.36.88
 	github.com/luxfi/crypto v1.20.2
 	github.com/luxfi/ids v1.3.2
 )
