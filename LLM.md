@@ -15,10 +15,23 @@ A block finalizes **at a tier** iff that tier's floor of DISTINCT validators eac
 produced a correctly BLS-signed ACCEPT vote over the same canonical position, AND
 their summed stake **strictly exceeds** that tier's stake floor:
 
-| tier | signers | stake | authorizes |
-|---|---|---|---|
-| **Nova** | ≥ `nova_signer_floor(n)` | > `floor(total/2)` | local execution (crash-safe, reorgable) |
-| **Quasar** | ≥ `two_thirds_count(n)` | > `floor(2·total/3)` | export — bridges, DEX settlement, cross-chain |
+| tier | set | signers | stake | authorizes |
+|---|---|---|---|---|
+| **Nova** | n ≥ 1 | ≥ `nova_signer_floor(n)` | > `floor(total/2)` | local execution (crash-safe, reorgable) |
+| **Quasar** | n ≥ `kMinBFTCommittee` (4) | ≥ `two_thirds_count(n)` | > `floor(2·total/3)` | export — bridges, DEX settlement, cross-chain |
+
+The export rung carries a THIRD floor, `committee_floor`, and it is read against
+the SET rather than against the votes. Byzantine tolerance is `f = (n-1)/3`, which
+is zero for n of one, two and three: below four signers a two-thirds supermajority
+tolerates no fault at all, so a unanimous certificate carrying every unit of stake
+is forged by any single compromised key among its signers. Neither floor above
+catches it, because both are read over n and both shrink with it —
+`two_thirds_count(1)` is 1. Both entry points read it, `clears_floors` and
+`verify_cert`, so a certificate cannot enter through the one that forgot. Nova
+floors at one: it authorizes only local execution the chain can reorg away, and a
+four-signer floor there would stop a small chain making any progress in exchange
+for a guarantee the rung never offered. Go `engine/chain.minBFTCommittee`, Rust
+`MIN_BFT_COMMITTEE`.
 
 Both floors of both rungs are **derived from the live set**, never configured.
 `QuorumCertEngine` takes the validator set and nothing else. The export count floor
@@ -34,8 +47,9 @@ Neither half of a rung is sufficient alone.
 alpha)`, `kConsensusSuperMajority` = 0.69) — a different quantity that shares a
 letter and nothing else.
 
-Fail-closed: zero signer stake, an unknown block, an unknown tier, an empty set, or
-an unresolved validator count never finalize. There is **no** force-accept, no
+Fail-closed: zero signer stake, an unknown block, an unknown tier, an empty set, a
+signing set below the minimum Byzantine committee at the export rung, or an
+unresolved validator count never finalize. There is **no** force-accept, no
 `k==1`, no count-only path. A cert cannot forge its tier upward — the verifier
 re-derives both floors from the live validator set instead of reading the cert's own
 claim, so a Nova set of votes relabelled Quasar dies on the ⅔ clause. Mirrors Go
@@ -347,10 +361,27 @@ engine. Missing, and known missing:
   stake and pubkeys at the block's P-chain epoch height. Note what is NOT missing:
   a `Validator` here IS a public key and the engine's set is keyed by one, so a
   member the chain carries without a key has no slot to occupy and `total_stake_`
-  is the SIGNER stake by construction. That is the denominator Go and Rust now
-  read too, and `conformance_test` conforms it directly — the `quasar_keyless_third`
-  row states both what the chain carries and what its signers hold, and checks this
-  engine reached the smaller number.
+  is the SIGNER stake.
+
+  It is the signer stake by ENFORCEMENT, not by construction, and the difference
+  mattered. A `PubKey` is a `std::array<uint8_t,48>`, so it is always PRESENT and
+  presence proves nothing: forty-eight zero bytes are a well-formed value and not a
+  point of G1. Such a seat held stake in every denominator and could never produce
+  a signature this engine accepts — the spectator this implementation was said to
+  have no slot for, admitted through the front door and stranding the export rung
+  exactly as a keyless member does in Go and Rust, silently, because nothing here
+  decoded the key until a vote arrived that never came. The constructor now runs
+  `bls::key_validate` on every seat — canonical compressed G1, in the prime-order
+  subgroup, not the identity, one point one encoding — which is the SAME function
+  `pop_verify`'s Key leg is, so the door and the proof cannot come to disagree
+  about what a key is. A dead key is a construction error.
+
+  `conformance_test` conforms the denominator directly: each row states what the
+  chain carries and what its signers hold, in stake (`carried`/`total`) and in
+  seats (`roll`/`set_size`), and checks this engine reached the smaller of each.
+  A keyless row is only worth having if the roll reading would have refused it, so
+  the harness checks that too — in either unit, since `quasar_keyless_stake` is
+  stranded in stake and `quasar_keyless_count` in seats.
 - **The sampling round-trip.** `photon` samples and `wave` tallies, but no
   query/chit exchange runs on the wire; the embedder drives the tally.
 - **Cert identity.** The cert keys voters by 48-byte BLS pubkey; Go keys by

@@ -568,31 +568,51 @@ void weighted_decision() {
         QuorumCertEngine engine(vals);
         check(engine.total_stake() == u64(r, "total"), name + ": total stake matches Go");
 
-        // THE KEYLESS DENOMINATOR, conformed. A row states two numbers: what the
-        // chain CARRIES and what its signers hold. They differ exactly when the
-        // set contains a member with no key — a spectator that holds stake and can
-        // never cast a vote.
+        // THE KEYLESS DENOMINATOR, conformed. A row states two sets: what the
+        // chain CARRIES and what its signers hold, each in stake and in seats.
+        // They differ exactly when the set contains a member with no key — a
+        // spectator that holds stake and can never cast a vote.
         //
-        // This implementation cannot represent one: a Validator IS a public key
-        // here, and the engine's set is keyed by it, so a spectator has no slot to
-        // occupy and the corpus does not project one. That is why this harness
-        // needs no engine change to agree — the denominator it computes is the
-        // signer stake because it is the only stake it can see. The check is that
-        // Go arrived at the SAME number from a set that did contain the spectator:
-        // it excluded that weight rather than counting it, or the two would part
-        // company here by exactly `keyless`.
+        // This implementation cannot represent one, and now enforces that it
+        // cannot: a Validator IS a public key here, the engine's set is keyed by
+        // it, and the constructor refuses a key that is not a point of G1 — so a
+        // spectator has no slot to occupy and the corpus does not project one.
+        // That is why this harness needs no engine change to agree; the
+        // denominator it computes is the signer stake because it is the only
+        // stake it can see. The check is that Go arrived at the SAME numbers from
+        // a set that did contain the spectator: it excluded that weight and that
+        // seat rather than counting them.
         const std::uint64_t carried = u64(r, "carried");
         const std::uint64_t keyless = u64(r, "keyless");
+        const std::size_t   roll    = static_cast<std::size_t>(u64(r, "roll"));
         check(carried == u64(r, "total") + keyless,
               name + ": carried stake is the signers' plus the keyless");
         check(engine.total_stake() == carried - keyless,
-              name + ": the floor is read over the signers, not over what the chain carries");
+              name + ": the stake floor is read over the signers, not over what the chain carries");
+        check(roll >= n, name + ": the roll cannot be smaller than the signing set");
+        check(engine.validator_count() == n,
+              name + ": the count floor is read over the signers, not over the membership roll");
         if (keyless > 0) {
-            // And the case is worth having only if the other reading would have
-            // stranded it: two thirds of what the chain carries is out of reach of
-            // every signer in the set combined.
-            check(engine.total_stake() <= two_thirds_stake_floor(carried),
-                  name + ": the keyless row does not reproduce a stranded export");
+            // A keyless row is worth having only if the OTHER reading would have
+            // refused it — and a row may be stranded in stake, in seats, or in
+            // both. Which one it is, is what the row is about: one row's spectator
+            // puts two thirds of the carried stake out of reach of every signer
+            // combined, another's adds seats until the roll's count floor exceeds
+            // the number of signatures the set is able to produce.
+            const bool stranded_by_stake = engine.total_stake() <= two_thirds_stake_floor(carried);
+            const bool stranded_by_count = k < two_thirds_count(static_cast<std::uint32_t>(roll));
+            check(stranded_by_stake || stranded_by_count,
+                  name + ": the keyless row does not reproduce a stranded export in either unit");
+        }
+
+        // THE EXPORT RUNG'S FLOOR ON THE SET. Below the minimum Byzantine
+        // committee f = (n-1)/3 is 0, so a two-thirds supermajority tolerates no
+        // fault and the rung refuses the size outright — whatever the row's
+        // quorum reaches. A row at such a size must expect a refusal, or this
+        // corpus and this engine have parted company about what export means.
+        if (tier == Tier::Quasar && n < kMinBFTCommittee) {
+            check(field(r, "expect") == "reject",
+                  name + ": a set below the minimum Byzantine committee expects no export");
         }
         check(engine.stake_floor(tier) == u64(r, "stake_floor"),
               name + ": the " + rung + " stake floor matches Go");

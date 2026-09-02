@@ -81,6 +81,21 @@ QuorumCertEngine::QuorumCertEngine(std::vector<Validator> validators) : total_st
     for (const auto& v : validators) {
         if (v.stake == 0)
             throw std::invalid_argument("consensus: in-set validator has zero stake");
+        // A VALIDATOR IS A SIGNER, enforced rather than assumed. A PubKey is a
+        // 48-byte array, so it is always PRESENT and presence proves nothing: 48
+        // zero bytes are a well-formed value and not a point of G1. Such a seat
+        // holds stake in every denominator and can never produce a signature this
+        // engine accepts, which is exactly the spectator this implementation was
+        // said to have no slot for — stranding the export rung as surely as a
+        // keyless member does in Go and Rust, and silently, because nothing else
+        // here ever decodes the key until a vote arrives that never comes.
+        //
+        // So the key is decoded HERE, once, through the same bls::key_validate
+        // the proof-of-possession path decodes it with: canonical compressed G1,
+        // in the prime-order subgroup, not the identity. A dead key is a
+        // construction error and not a runtime surprise.
+        if (!bls::key_validate(v.pubkey.data()))
+            throw std::invalid_argument("consensus: in-set validator public key is not a G1 point");
         if (!validators_.emplace(v.pubkey, v.stake).second)
             throw std::invalid_argument("consensus: duplicate validator pubkey");
         // Checked add: a wrapped total_stake_ would corrupt the stake floors and is a
@@ -104,6 +119,24 @@ std::uint32_t QuorumCertEngine::signer_floor(Tier tier) const noexcept {
 std::uint64_t QuorumCertEngine::stake_floor(Tier tier) const noexcept {
     return tier == Tier::Quasar ? two_thirds_stake_floor(total_stake_)
                                 : half_stake_floor(total_stake_);
+}
+
+std::uint32_t QuorumCertEngine::committee_floor(Tier tier) noexcept {
+    // The third floor, and the only one read against the SET rather than against
+    // the votes. Byzantine tolerance is f = (n-1)/3, which is 0 for n of one, two
+    // and three: below four signers a two-thirds supermajority tolerates no fault
+    // at all, so a unanimous certificate over such a set is forged by any single
+    // compromised key among its signers.
+    //
+    // Neither floor above catches it, because both are read over n and both
+    // therefore shrink with it — two_thirds_count(1) is 1, so one signature is a
+    // supermajority of one over a stake floor the same signature clears outright.
+    //
+    // Nova floors at one: it authorizes only local execution the chain can still
+    // reorg away, is crash-fault-safe rather than Byzantine-safe by construction,
+    // and a floor of four there would stop a small chain making any progress in
+    // exchange for a guarantee the rung never offered.
+    return tier == Tier::Quasar ? kMinBFTCommittee : 1;
 }
 
 std::uint64_t QuorumCertEngine::stake_of(const PubKey& voter) const {
@@ -209,6 +242,7 @@ void QuorumCertEngine::verify_tally(Pending& p) const {
 bool QuorumCertEngine::clears_floors(const Pending& p, Tier tier) const noexcept {
     // FAIL-CLOSED: no stake model ⇒ no majority of an unknown set can be asserted.
     if (total_stake_ == 0) return false;
+    if (validator_count() < committee_floor(tier)) return false;
     if (p.votes.size() < signer_floor(tier)) return false;
     return p.voted_stake > stake_floor(tier);  // STRICT
 }
@@ -286,8 +320,12 @@ bool QuorumCertEngine::verify_cert(const QuorumCert& cert) const {
     if (cert.tier != Tier::Nova && cert.tier != Tier::Quasar) return false;
     const std::uint32_t floor_count = signer_floor(cert.tier);
     if (cert.threshold == 0 || cert.threshold != floor_count) return false;
-    // (3) fail-closed on no stake model.
+    // (3) fail-closed on no stake model, and on a set too small for the tier's
+    //     fault model to mean anything. The second is the floor on the SET; see
+    //     committee_floor. Both entry points read it, so a certificate cannot
+    //     enter through the one that forgot.
     if (total_stake_ == 0) return false;
+    if (validator_count() < committee_floor(cert.tier)) return false;
     if (cert.voters.empty()) return false;
 
     // (4) voters strictly increasing (distinct, canonical order) AND all in-set;

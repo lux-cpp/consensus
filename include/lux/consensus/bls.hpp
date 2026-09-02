@@ -77,6 +77,22 @@ int fast_aggregate_verify(const std::uint8_t* pks, std::size_t n,
                           const std::uint8_t* msg, std::size_t msg_len,
                           const std::uint8_t agg_sig[96]) noexcept;
 
+// KeyValidate, the BLS spec's own name for it (IETF draft-irtf-cfrg-bls-signature
+// §2.5): a 48-byte string is a public key iff it deserializes to a point of G1
+// that is not the identity and lies in the prime-order subgroup. Lux adds a
+// fourth clause, ONE POINT ONE ENCODING — the bytes must be the canonical
+// spelling of the point they decode to — because a second spelling would be a key
+// no proof was ever made for.
+//
+// Two callers and one definition. pop_verify's Key leg IS this function, and
+// QuorumCertEngine's constructor calls it on every seat, so "a validator is a
+// signer" is a property the set ENFORCES rather than one a caller is trusted to
+// have checked. A seat carrying 48 bytes that are not a point holds stake in the
+// denominator and can never produce a signature that verifies: it strands the
+// export rung exactly as a keyless member does, and the type system cannot refuse
+// it here because a PubKey is an array and is therefore always present.
+[[nodiscard]] bool key_validate(const std::uint8_t pk[48]) noexcept;
+
 // The proof-of-possession ciphersuite — byte-identical to Go's dstPoP, distinct
 // from kVoteDST by the _POP_ tag so a vote is never a proof and a proof never a
 // vote. See luxfi/conformance vectors/pop.json, the frozen cross-language corpus.

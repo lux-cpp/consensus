@@ -86,6 +86,11 @@ func decisions() []map[string]any {
 			"total":        c.Total,
 			"carried":      strconv.FormatUint(carried, 10),
 			"keyless":      strconv.FormatUint(keyless, 10),
+			// The membership roll's SIZE, beside its stake. set_size is the signer
+			// count and this is what the chain carries, so a row states both
+			// denominators in both units — and a runner can check that the roll
+			// reading would have refused the row, in seats as well as in stake.
+			"roll":         len(c.Set),
 			"voted":        c.Voted,
 			"signer_floor": c.SignerFloor,
 			"stake_floor":  c.StakeFloor,
