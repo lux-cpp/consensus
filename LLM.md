@@ -389,6 +389,18 @@ as literal text so a `uint64` near `MaxUint64` never passes through a double.
 here are the default. `luxfi/conformance` is the corpus's eventual home — promoting
 these files there is a cross-repo change and has not been made.
 
+`pop.json` is the exception to regenerable: `scripts/oracle` does not write it. It
+comes from `luxfi/conformance` (`oracle/pop.go`, over `validator/pop`) and is
+carried here verbatim so the harness needs no Go — so nothing in this checkout can
+rederive it, and a carried copy can fall behind its source in silence. CMakeLists
+pins its sha256 and configure refuses any other bytes, including through a
+`-DCONFORMANCE_DIR=` pointed at a stale checkout. The case count
+`pop_conformance_test` asserts does not cover this: a count catches a copy that
+lost a case, not one of the right length carrying the wrong bytes.
+`luxfi/consensus` carries the same file for the Rust runner at the same digest, so
+regenerating that corpus is deliberate and moves all three copies and the digest
+together.
+
 `testdata/` is the second corpus, on the same discipline: five binary witness
 fixtures the quasar tests read with no argument, regenerable from the same Go
 source of truth. Bytes differ run to run only because the generator mints fresh
