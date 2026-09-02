@@ -27,7 +27,24 @@ tolerates no fault at all, so a unanimous certificate carrying every unit of sta
 is forged by any single compromised key among its signers. Neither floor above
 catches it, because both are read over n and both shrink with it —
 `two_thirds_count(1)` is 1. Both entry points read it, `clears_floors` and
-`verify_cert`, so a certificate cannot enter through the one that forgot. Nova
+`verify_cert`, so a certificate cannot enter through the one that forgot. The
+PORTABLE certificate (`cert.hpp`) now carries the same rule at
+`Cert::verify_weighted(const Keys&, const Stake&)`: `Cert::verify` is the
+structural and signature predicate and is NOT an accept rule, because its last
+clause counts against the certificate's own threshold. Until it existed nothing on
+this side could weigh a GOSSIPED certificate against a validator set, while Go's
+gossip path could — a certificate two implementations admit and one cannot weigh is
+not one rule. Both certificate types read one floor, the free function
+`signer_floor(Tier, n)`, which is Go's `chain.SignerFloor` and Rust's
+`finality::signer_floor`.
+
+**A certificate states its quorum; it does not choose it.** Both verifiers require
+`threshold == signer_floor(tier, n)` exactly — equality, not a lower bound, in both
+directions. `vectors/decision.json` carries the declaration beside the derived floor
+so the two can be checked against each other, and three of its eighteen rows declare
+something else on purpose. The LOCAL gate (`is_final`) is handed no certificate and
+therefore no declaration, so it accepts those three: two objects, two questions.
+Nova
 floors at one: it authorizes only local execution the chain can reorg away, and a
 four-signer floor there would stop a small chain making any progress in exchange
 for a guarantee the rung never offered. Go `engine/chain.minBFTCommittee`, Rust

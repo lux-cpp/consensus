@@ -89,6 +89,22 @@ enum class Tier : std::uint8_t {
     Quasar = 3,  // strict ⅔-by-stake export cert
 };
 
+// The DISTINCT signers a certificate must carry to attest `tier` over a set of n
+// signers — the whole of a certificate's authority in seats, and a function of the
+// set and the rung, never of the certificate.
+//
+// ONE DEFINITION, read everywhere a floor is read: the aggregate engine derives its
+// gate from it, the portable Cert's weighted verifier enforces it, and the
+// derived-threshold clause of both compares a certificate's own declaration against
+// it. A second spelling anywhere is how a certificate acquires a quorum of its own
+// choosing. Go chain.SignerFloor, Rust finality::signer_floor.
+//
+//   Nova   → nova_signer_floor(n), which saturates at three: local execution has to
+//            stay reachable on a small chain, and it is reorgable.
+//   Quasar → two_thirds_count(n), the export supermajority read in seats — the same
+//            supermajority the stake clause reads in weight.
+[[nodiscard]] std::uint32_t signer_floor(Tier tier, std::uint32_t n) noexcept;
+
 // A validator is a distinct {public key, voting stake}. Stake must be > 0 for an
 // in-set validator; an out-of-set key contributes 0 stake (cannot inflate a tally).
 struct Validator {

@@ -27,6 +27,10 @@ const char* refusal_name(Refusal r) noexcept {
         case Refusal::Signature:      return "signature";
         case Refusal::BelowThreshold: return "below_threshold";
         case Refusal::Wire:           return "wire";
+        case Refusal::ThresholdNotDerived:     return "threshold_not_derived";
+        case Refusal::StakeBelowMajority:      return "stake_below_majority";
+        case Refusal::StakeBelowSupermajority: return "stake_below_supermajority";
+        case Refusal::WeightOverflow:          return "weight_overflow";
     }
     return "unknown";
 }
@@ -214,6 +218,89 @@ Refusal Cert::verify(const Keys& keys) const {
         ++count;
     }
     if (count < threshold) return Refusal::BelowThreshold;
+    return Refusal::None;
+}
+
+namespace {
+
+// The certificate's tally, summed and CHECKED — refused rather than clamped.
+//
+// It must not wrap, and wrapping is what an unchecked loop does: a sum past 2^64
+// does not fail, it returns a DIFFERENT number and the comparison proceeds as if
+// nothing happened. The wrapped value can land anywhere, above the floor included.
+// Clamping is no better: it pins both sides to the maximum, and that maximum
+// exceeds two thirds of itself, so half the stake would read as a supermajority.
+//
+// Reaching the overflow is evidence about the SOURCE and not about the votes: the
+// voters are a subset of the members, so against any admissible set this sum is
+// bounded by a total that set already proved representable. A source reporting
+// otherwise is describing weights no admitted set could hold, and a source that
+// cannot state its own total is not one a threshold can be read against.
+bool tally(const std::vector<Vote>& votes, const Stake& stake, std::uint64_t& out) {
+    std::uint64_t voted = 0;
+    for (const Vote& v : votes) {
+        const std::uint64_t w = stake.weight(v.node);
+        if (voted > UINT64_MAX - w) return false;
+        voted += w;
+    }
+    out = voted;
+    return true;
+}
+
+}  // namespace
+
+Refusal Cert::verify_weighted(const Keys& keys, const Stake& stake) const {
+    if (const Refusal why = verify(keys); why != Refusal::None) return why;
+
+    // DERIVED AUTHORITY. The certificate states the quorum it was built to; the SET
+    // decides what that quorum is. The two must be the same number, so the field
+    // carries no authority of its own — it is a claim this clause checks, never a
+    // value the verifier adopts. Equality and not a lower bound: an over-claim names
+    // a bar this set does not set, and tolerating it would let a certificate
+    // redefine the rung upward exactly as tolerating an under-claim lets it redefine
+    // the rung down.
+    //
+    // An unresolved set derives no floor, so nothing is compared against it and the
+    // rung's own clause below refuses under the name it has always carried. Stepping
+    // aside is not a pass: both rungs fail closed on a set of no signers.
+    const std::uint32_t n = stake.signer_count();
+    if (n >= 1 && threshold != signer_floor(tier, n)) return Refusal::ThresholdNotDerived;
+
+    const std::uint64_t signer = stake.signer_stake();
+    const auto voters = static_cast<std::uint32_t>(votes.size());
+
+    if (tier == Tier::Nova) {
+        // The accept rung: a strict majority of signer stake, and at least the
+        // rung's floor of distinct signers. Two independent predicates, neither
+        // sufficient alone — a lone holder of a stake majority must not self-ignite,
+        // and the floor is the guard the stake predicate cannot give.
+        if (n < 1) return Refusal::BelowThreshold;
+        if (voters < signer_floor(Tier::Nova, n)) return Refusal::BelowThreshold;
+        if (signer == 0) return Refusal::StakeBelowMajority;
+        std::uint64_t voted = 0;
+        if (!tally(votes, stake, voted)) return Refusal::WeightOverflow;
+        if (voted <= half_stake_floor(signer)) return Refusal::StakeBelowMajority;
+        return Refusal::None;
+    }
+
+    // The export rung. Stake first, so a refusal is named by the more informative
+    // clause where both bind; the order decides nothing else, because both must hold.
+    if (signer == 0) return Refusal::StakeBelowSupermajority;
+    std::uint64_t voted = 0;
+    if (!tally(votes, stake, voted)) return Refusal::WeightOverflow;
+    if (voted <= two_thirds_stake_floor(signer)) return Refusal::StakeBelowSupermajority;
+    // An unresolved set fails closed HERE rather than at the top: a source reporting
+    // no validators alongside no stake is already refused above for the reason it has
+    // always been refused for, and only a source reporting stake for a set it calls
+    // empty reaches this line. Two thirds of no set is not a number.
+    if (n < 1) return Refusal::BelowThreshold;
+    // The floor on the SET, which is a different quantity from the floor on the
+    // voters and is not implied by it: f = (n-1)/3 is 0 below four signers, so a
+    // two-thirds supermajority over such a set tolerates no fault at all and one
+    // compromised key forges the certificate. Both quorum floors shrink with n and
+    // neither catches it — two_thirds_count(1) is 1.
+    if (n < kMinBFTCommittee) return Refusal::BelowThreshold;
+    if (voters < signer_floor(Tier::Quasar, n)) return Refusal::BelowThreshold;
     return Refusal::None;
 }
 
