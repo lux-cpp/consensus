@@ -560,6 +560,139 @@ int main() {
               "a certificate from the admitted set verifies against it");
     }
 
+    // ── 8. The registry is the SECOND wall, and it does not trust the first ──
+    // admit() builds a canonical set; install() seats it. CanonicalSet is a plain
+    // aggregate, so a set that never went through admit() can be handed to
+    // install() by anything that can name the type — a caller reading one off a
+    // wire, a future door with a bug in it. The registry therefore decodes every
+    // key itself rather than believing the set that carries it, and refuses the
+    // whole seating if any one of them is not a key. Seated whole or not at all.
+    std::printf("\n[8] a set that did not come through the door is still decoded key by key\n");
+    {
+        const Key good = make_key(0x71);
+        const Node n0 = make_node(0x01), n1 = make_node(0x02);
+
+        const auto seats = [&](const PubKey& second, const std::string& what, bool want) {
+            CanonicalSet forged;
+            forged.validators.push_back(CanonicalValidator{n0, good.pk, 10});
+            forged.validators.push_back(CanonicalValidator{n1, second, 10});
+            forged.total_weight = 20;
+            Registry keys;
+            const bool ok = forged.install(keys);
+            check(ok == want, what);
+            // Whole or not at all: a refused install leaves NOTHING seated, so the
+            // first validator cannot be resolvable while the second is not.
+            check(keys.size() == (want ? 2u : 0u),
+                  want ? "  …and both seats are taken" : "  …and no partial registry is left behind");
+        };
+
+        PubKey not_a_point{};
+        not_a_point.fill(0xAB);
+        PubKey identity{};
+        identity[0] = 0xC0;  // the compressed identity: it verifies ANY message
+        PubKey off_subgroup{};
+        {
+            // On the curve, outside the prime-order subgroup — past the decode
+            // clause and into the subgroup one, which is a separate refusal.
+            bool found = false;
+            for (std::uint32_t x = 1; x < 4096 && !found; ++x) {
+                off_subgroup.fill(0);
+                off_subgroup[47] = std::uint8_t(x);
+                off_subgroup[46] = std::uint8_t(x >> 8);
+                off_subgroup[0] |= 0x80;
+                blst_p1_affine a;
+                found = blst_p1_uncompress(&a, off_subgroup.data()) == BLST_SUCCESS &&
+                        !blst_p1_affine_in_g1(&a);
+            }
+            if (!found) die("no off-subgroup G1 candidate found");
+        }
+
+        seats(make_key(0x72).pk, "a set of two real keys seats", true);
+        seats(not_a_point, "a key that is not a curve point seats nothing", false);
+        seats(identity, "the identity key seats nothing — it would verify any message", false);
+        seats(off_subgroup, "a curve point outside the prime-order subgroup seats nothing", false);
+        seats(good.pk, "and one key under two node ids seats nothing", false);
+
+        // A registry that already holds a set is not this set: seating is a
+        // rotation, not an accumulation.
+        {
+            CanonicalSet a;
+            a.validators.push_back(CanonicalValidator{n0, good.pk, 10});
+            a.total_weight = 10;
+            Registry keys;
+            check(a.install(keys) && keys.size() == 1, "a fresh registry takes a set");
+            CanonicalSet b;
+            b.validators.push_back(CanonicalValidator{n1, make_key(0x73).pk, 10});
+            b.total_weight = 10;
+            check(!b.install(keys), "a registry that already holds a set refuses a second");
+            check(keys.size() == 1, "  …and keeps the one it had");
+        }
+    }
+
+    // ── 9. A seated registry refuses a signature that was never a point ──────
+    // The certificate verifier asks the registry, and the registry asks blst. A
+    // vote carrying 96 bytes that do not decode is a refusal at that leg — never
+    // a pairing, and never a skip that would leave the vote uncounted but the
+    // certificate still valid.
+    std::printf("\n[9] a vote whose signature is not a G2 point is refused, not skipped\n");
+    {
+        const Key k = make_key(0x81);
+        const Node n = make_node(0x11);
+        CanonicalSet set;
+        set.validators.push_back(CanonicalValidator{n, k.pk, 10});
+        set.total_weight = 10;
+        Registry keys;
+        if (!set.install(keys)) die("install");
+
+        const VotePosition pos = make_pos(0x55);
+        Cert c;
+        c.position = pos;
+        c.threshold = 1;
+        const std::vector<std::uint8_t> msg = canonical_vote_message(pos);
+        Signature s{};
+        if (bls::sign(k.sk.data(), msg.data(), msg.size(), s.data()) != 0) die("sign");
+        c.votes.push_back(Vote{n, true, {s.begin(), s.end()}});
+        check(c.verify(keys) == Refusal::None, "the genuine vote verifies against the registry");
+
+        Cert bad = c;
+        bad.votes[0].signature.assign(96, 0xCD);
+        check(bad.verify(keys) == Refusal::Signature,
+              "96 bytes that are not a G2 point are a signature refusal");
+
+        Cert unknown = c;
+        unknown.votes[0].node = make_node(0x99);
+        check(unknown.verify(keys) == Refusal::Signature,
+              "a voter the registry cannot resolve is refused, not skipped");
+    }
+
+    // ── 10. Every verdict this door and this verifier can give has a name ────
+    // The names are not decoration: conformance_test compares them against the Go
+    // corpus, so a table that fell out of step with its enum would report a
+    // refusal Go never made and call the two implementations equal.
+    std::printf("\n[10] the verdict names are the ones the corpus is compared against\n");
+    {
+        check(std::string(admission_name(Admission::Why::Ok)) == "ok" &&
+                  std::string(admission_name(Admission::Why::NoKey)) == "no_key" &&
+                  std::string(admission_name(Admission::Why::ZeroWeight)) == "zero_weight" &&
+                  std::string(admission_name(Admission::Why::Possession)) == "possession" &&
+                  std::string(admission_name(Admission::Why::DuplicateKey)) == "duplicate_key" &&
+                  std::string(admission_name(Admission::Why::DuplicateNode)) == "duplicate_node" &&
+                  std::string(admission_name(Admission::Why::WeightOverflow)) == "weight_overflow",
+              "every admission verdict has its own name");
+        check(std::string(refusal_name(Refusal::None)) == "ok" &&
+                  std::string(refusal_name(Refusal::Version)) == "version" &&
+                  std::string(refusal_name(Refusal::Role)) == "role" &&
+                  std::string(refusal_name(Refusal::Tier)) == "tier" &&
+                  std::string(refusal_name(Refusal::ThresholdZero)) == "threshold_zero" &&
+                  std::string(refusal_name(Refusal::NoVotes)) == "no_votes" &&
+                  std::string(refusal_name(Refusal::Order)) == "order" &&
+                  std::string(refusal_name(Refusal::NotAccept)) == "not_accept" &&
+                  std::string(refusal_name(Refusal::Signature)) == "signature" &&
+                  std::string(refusal_name(Refusal::BelowThreshold)) == "below_threshold" &&
+                  std::string(refusal_name(Refusal::Wire)) == "wire",
+              "and every certificate refusal has its own name");
+    }
+
     std::printf("\n--------------------------------------------------------------------------------\n");
     std::printf("checks: %d passed, %d failed\n", g_pass, g_fail);
     if (g_fail) { std::printf("==== REGISTRATION: FAIL ====\n"); return 1; }

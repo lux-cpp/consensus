@@ -38,6 +38,7 @@
 #include "lux/consensus/quorum_cert_engine.hpp"
 #include "lux/consensus/threshold.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -377,6 +378,240 @@ int main() {
 
         // The clause does not touch a set of real keys.
         check(bls::key_validate(keys[0].pk.data()), "a real validator key validates");
+    }
+
+    // ── [10] verify_cert's refusal table, clause by clause ──────────────────
+    // A portable certificate arrives from the wire, so every field on it is an
+    // adversary's choice. Each clause of verify_cert is the answer to one such
+    // choice, and each is checked here against a certificate that is otherwise
+    // VALID — one edit from a cert the same engine accepts, so a clause that
+    // stopped refusing could not hide behind another. This is the C++ reading of
+    // Go's ErrQC* table (engine/chain.QuorumCert.Verify / VerifyWeighted) and of
+    // Rust's Cert rejects.
+    std::printf("\n[10] every clause of verify_cert refuses, one edit from a valid cert\n");
+    {
+        std::vector<Validator> set;
+        for (const Key& k : keys) set.push_back({k.pk, 20});
+        QuorumCertEngine e(set);
+
+        const VotePosition P = make_pos(0xA0, 50);
+        e.submit(P);
+        for (int i = 0; i < 4; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
+        const auto assembled = e.assemble_cert(P.block_id, Tier::Quasar);
+        check(assembled.has_value() && e.verify_cert(*assembled),
+              "the unedited certificate verifies — every refusal below is ONE edit from it");
+        if (!assembled) { std::printf("cannot continue without a base cert\n"); return 1; }
+        const QuorumCert base = *assembled;
+
+        const auto refuses = [&](QuorumCert c, const std::string& what) {
+            check(!e.verify_cert(c), what);
+        };
+
+        { QuorumCert c = base; c.version = kQuorumCertVersion + 1; refuses(c, "a wrong version"); }
+        { QuorumCert c = base; c.type = kQCFinality + 1; refuses(c, "a wrong role byte"); }
+        { QuorumCert c = base; c.tier = static_cast<Tier>(0); refuses(c, "a tier that is neither rung"); }
+        { QuorumCert c = base; c.threshold = 0; refuses(c, "a threshold of zero"); }
+        { QuorumCert c = base; c.threshold = base.threshold + 1;
+          refuses(c, "a threshold above the floor this set derives"); }
+        { QuorumCert c = base; c.voters.clear(); refuses(c, "no voters at all"); }
+        { QuorumCert c = base; c.voters[1] = c.voters[0];
+          refuses(c, "a duplicate voter — one signature counted twice"); }
+        { QuorumCert c = base; std::swap(c.voters[0], c.voters[1]);
+          refuses(c, "voters out of canonical ascending order"); }
+        // The out-of-set voter must still be in ASCENDING order, or the order
+        // clause refuses it first and this clause is never reached. Substituting
+        // and re-sorting keeps every other field of the cert valid.
+        { QuorumCert c = base; c.voters.back() = make_key(0x2A).pk;
+          std::sort(c.voters.begin(), c.voters.end());
+          refuses(c, "a voter that is not in the set"); }
+        { QuorumCert c = base; c.voters.pop_back();
+          refuses(c, "one voter short of the tier's distinct-signer floor"); }
+        { QuorumCert c = base; c.aggregate_sig.fill(0xAB);
+          refuses(c, "an aggregate signature that is not a G2 point"); }
+        { QuorumCert c = base; c.aggregate_sig[95] ^= 0x01;
+          refuses(c, "an aggregate signature with one bit flipped"); }
+        { QuorumCert c = base; c.position.height ^= 1;
+          refuses(c, "a position the signatures were not cast over"); }
+        // The stake floor is STRICT and is recomputed from the set, never read off
+        // the cert: a cert that reports its own stake as a supermajority does not
+        // get one. Four of five equal seats is 80 of 100, which clears >66; three
+        // is 60, which does not — and it is the recomputed 60 that decides, not the
+        // 80 still written on the cert.
+        {
+            QuorumCert c = base;
+            c.voters.pop_back();
+            c.threshold = 3;
+            check(c.voted_stake == 80 && e.stake_floor(Tier::Quasar) == 66,
+                  "the cert still CLAIMS 80 against a floor of 66");
+            check(!e.verify_cert(c),
+                  "and is refused anyway — the tally is recomputed from the set");
+        }
+    }
+
+    // The stake floor binding ALONE. Every other clause has to pass for it to be
+    // the one that refuses: the right count of distinct in-set voters, in order,
+    // the derived threshold, a genuine aggregate over the canonical message — and
+    // four light seats out of a hundred and four still do not carry two thirds of
+    // the weight. This is scenario [7] read at the certificate rather than at the
+    // tally, and it is the clause a verifier that trusted cert.voted_stake would
+    // skip.
+    {
+        std::vector<Validator> set;
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            set.push_back({keys[i].pk, i == 0 ? std::uint64_t(100) : std::uint64_t(1)});
+        QuorumCertEngine e(set);
+
+        const VotePosition P = make_pos(0xA5, 51);
+        QuorumCert c{};
+        c.version   = kQuorumCertVersion;
+        c.type      = kQCFinality;
+        c.tier      = Tier::Quasar;
+        c.position  = P;
+        c.threshold = e.signer_floor(Tier::Quasar);
+
+        std::vector<PubKey> light;
+        for (std::size_t i = 1; i < keys.size(); ++i) light.push_back(keys[i].pk);
+        std::sort(light.begin(), light.end());
+        c.voters = light;
+
+        std::vector<std::uint8_t> sigs;
+        for (const PubKey& pk : light) {
+            const Key* owner = nullptr;
+            for (const Key& k : keys)
+                if (k.pk == pk) owner = &k;
+            const Signature s = sign_vote(*owner, P);
+            sigs.insert(sigs.end(), s.begin(), s.end());
+        }
+        if (bls::aggregate_sigs(sigs.data(), light.size(), c.aggregate_sig.data()) != 0) {
+            std::puts("aggregate_sigs"); std::exit(2);
+        }
+
+        check(c.voters.size() == e.signer_floor(Tier::Quasar),
+              "four genuine in-set signers, exactly the export count floor");
+        check(e.total_stake() == 104 && e.stake_floor(Tier::Quasar) == 69,
+              "carrying four of a hundred and four, against a floor of 69");
+        check(!e.verify_cert(c),
+              "the certificate is refused on the STAKE floor alone — every other clause passed");
+    }
+
+    // ── [11] the set the gate is built on, refused at construction ──────────
+    // Every one of these would be a floor read against a denominator that does
+    // not describe the set. They are refused where the set is stated rather than
+    // where a certificate is judged, because by then the total is already wrong.
+    std::printf("\n[11] a set the floors could not be read against does not construct\n");
+    {
+        const auto refuses = [](std::vector<Validator> set, const std::string& what) {
+            bool threw = false;
+            try { QuorumCertEngine e(std::move(set)); } catch (const std::invalid_argument&) { threw = true; }
+            check(threw, what);
+        };
+        refuses({}, "an empty validator set");
+        refuses({{keys[0].pk, 100}, {keys[1].pk, 0}},
+                "a seat with zero stake — it would raise the signer count and not the weight");
+        refuses({{keys[0].pk, 100}, {keys[0].pk, 100}},
+                "one key seated twice — two signer indices on one signature");
+        refuses({{keys[0].pk, UINT64_MAX}, {keys[1].pk, 1}},
+                "a total stake that overflows — a wrapped total is a floor that lies");
+
+        // And the set that says none of those things constructs, with the total it
+        // was given.
+        QuorumCertEngine ok(std::vector<Validator>{{keys[0].pk, 1}, {keys[1].pk, 2}, {keys[2].pk, 3}});
+        check(ok.total_stake() == 6 && ok.validator_count() == 3,
+              "a well-formed set carries exactly the stake it was handed");
+    }
+
+    // ── [12] the pending-block bookkeeping ──────────────────────────────────
+    // The gate is asked about blocks it has never seen and about blocks it has
+    // been told about twice. Neither may invent a tally.
+    std::printf("\n[12] submit is idempotent, drop is reported, an unknown block tallies zero\n");
+    {
+        std::vector<Validator> set;
+        for (const Key& k : keys) set.push_back({k.pk, 20});
+        QuorumCertEngine e(set);
+
+        BlockId unknown{};
+        unknown.fill(0xD0);
+        check(e.distinct_voters(unknown) == 0 && e.voted_stake(unknown) == 0,
+              "an unknown block has no voters and no stake");
+        check(!e.position(unknown).has_value(), "and no position");
+        check(!e.drop(unknown), "dropping a block that was never pending reports nothing dropped");
+
+        const VotePosition P = make_pos(0xB0, 60);
+        check(e.submit(P), "the first submit accepts the position");
+        check(!e.submit(P), "a second submit of the same block is refused, not re-armed");
+        check(e.position(P.block_id).has_value() && e.position(P.block_id)->height == 60,
+              "and the position it holds is the one it was given");
+
+        (void)e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P));
+        check(e.distinct_voters(P.block_id) == 1 && e.voted_stake(P.block_id) == 20,
+              "one vote is one voter and that voter's stake");
+        // A re-submit must not have reset the tally either.
+        check(!e.submit(P), "re-submitting a block that already has votes is still refused");
+        check(e.distinct_voters(P.block_id) == 1, "and the votes it already holds survive it");
+
+        check(e.drop(P.block_id), "dropping a pending block reports that it was dropped");
+        check(e.distinct_voters(P.block_id) == 0 && !e.position(P.block_id).has_value(),
+              "and the block is gone with its tally");
+        check(e.submit(P), "so the same position can be armed again");
+    }
+
+    // ── [13] the vote door ──────────────────────────────────────────────────
+    // record_vote's answers are the gate's account of what it did with a vote, and
+    // a caller that cannot tell "counted" from "ignored" cannot tell a live tally
+    // from a stalled one.
+    std::printf("\n[13] every answer record_vote can give\n");
+    {
+        std::vector<Validator> set;
+        for (const Key& k : keys) set.push_back({k.pk, 20});
+        QuorumCertEngine e(set);
+
+        const VotePosition P = make_pos(0xC1, 70);
+        BlockId unknown{};
+        unknown.fill(0xE1);
+        check(e.record_vote(unknown, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::RejectedNoSuchBlock,
+              "a vote for a block the gate never saw is refused");
+
+        e.submit(P);
+        const Key outsider = make_key(0x2B);
+        check(e.record_vote(P.block_id, outsider.pk, sign_vote(outsider, P)) ==
+                  VoteResult::RejectedUnknownValidator,
+              "a vote from a key that holds no stake is refused");
+        check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::Recorded,
+              "an in-set vote is recorded");
+        check(e.record_vote(P.block_id, keys[0].pk, sign_vote(keys[0], P)) == VoteResult::Duplicate,
+              "and a replay of it is a duplicate, never a second count");
+        check(e.distinct_voters(P.block_id) == 1, "so the tally still holds one voter");
+
+        // A forged signature joins as a candidate and is evicted at the gate, where
+        // the one aggregate pairing is spent — so the refusal shows up as a tally
+        // that does not clear, and the forger's stake is refunded rather than
+        // counted.
+        for (int i = 1; i < 4; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
+        Signature forged = sign_vote(keys[4], P);
+        forged[0] ^= 0x01;
+        (void)e.record_vote(P.block_id, keys[4].pk, forged);
+        check(e.distinct_voters(P.block_id) == 5, "the forged vote joins as a candidate");
+        check(e.is_final(P.block_id, Tier::Quasar),
+              "the four genuine votes still export");
+        check(e.distinct_voters(P.block_id) == 4 && e.voted_stake(P.block_id) == 80,
+              "and the forgery was evicted at the gate, its stake refunded");
+        // Asking again is the same answer over a tally already certified: the one
+        // aggregate pairing is not re-spent, and an eviction that already happened
+        // does not happen twice.
+        check(e.is_final(P.block_id, Tier::Quasar) && e.distinct_voters(P.block_id) == 4,
+              "asking a second time gives the same answer over the same voters");
+        // Now the tally is settled, so a later vote pays its own pairing.
+        check(e.record_vote(P.block_id, keys[4].pk, sign_vote(keys[4], P)) == VoteResult::Recorded,
+              "a genuine late vote joins a settled tally");
+        Signature forged2 = sign_vote(keys[4], P);
+        forged2[0] ^= 0x02;
+        QuorumCertEngine e2(set);
+        const VotePosition Q = make_pos(0xC2, 71);
+        e2.submit(Q);
+        for (int i = 0; i < 4; ++i) (void)e2.record_vote(Q.block_id, keys[i].pk, sign_vote(keys[i], Q));
+        check(e2.is_final(Q.block_id, Tier::Quasar), "a clean tally settles");
+        check(e2.record_vote(Q.block_id, keys[4].pk, forged2) == VoteResult::RejectedBadSignature,
+              "and a forged late vote is refused outright at the settled tally");
     }
 
     std::printf("\n--------------------------------------------------------------------------------\n");

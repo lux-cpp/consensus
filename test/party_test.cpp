@@ -189,6 +189,14 @@ int main() {
                                                   wave, bus));
     for (auto& p : parties) bus.subs.push_back(p.get());
 
+    // Each party carries the roster slot it was built for. The mesh attributes a
+    // vote by the KEY on it, so this is not what makes a vote countable — but a
+    // party that reported someone else's slot would make every log line and every
+    // "which one of you did that" question answer wrong.
+    bool slots_own = true;
+    for (std::uint32_t i = 0; i < kN; ++i) slots_own &= parties[i]->index() == i;
+    check(slots_own, "each party reports the roster slot it was constructed for");
+
     const VotePosition pos = make_pos(0x5C, 9);
     for (auto& p : parties) p->submit(pos);
     for (std::uint32_t r = 0; r < wave.beta; ++r)
