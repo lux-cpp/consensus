@@ -203,11 +203,11 @@ func committees() []map[string]any {
 	rows := make([]map[string]any, 0, len(ns))
 	for _, n := range ns {
 		rows = append(rows, map[string]any{
-			"n":                         n,
-			"nova_quorum":               chain.NovaQuorum(n),
-			"nova_signer_floor":         chain.NovaSignerFloor(n),
-			"equal_stake_supermajority": config.EqualStakeSupermajorityThreshold(n),
-			"alpha_for_k":               config.AlphaForK(n),
+			"n":                 n,
+			"nova_quorum":       chain.NovaQuorum(n),
+			"nova_signer_floor": chain.NovaSignerFloor(n),
+			"two_thirds_count":  config.TwoThirdsCount(n),
+			"alpha_for_k":       config.AlphaForK(n),
 		})
 	}
 	return rows

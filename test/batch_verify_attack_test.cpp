@@ -58,7 +58,7 @@ int main() {
     // A1 — wrong-MESSAGE sig from an in-set validator padding a quorum: a valid sig
     //      by k3, but over a DIFFERENT position. Must be caught at quorum, evicted.
     {
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x41, 100, 7);
         const VotePosition OTHER = make_pos(0x42, 100, 7);  // different block id, same height/epoch
         e.submit(P);
@@ -75,7 +75,7 @@ int main() {
     //      negation/compensation: k2 submits a forged sig, k3 the "fix-up". The only
     //      aggregate that verifies is the genuine sum — so this must NOT finalize.
     {
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x43, 101, 7);
         e.submit(P);
         (void)e.record_vote(P.block_id, keys[0].pk, sign(keys[0], P));  // genuine
@@ -92,7 +92,7 @@ int main() {
 
     // A3 — identity/zero signature from an in-set validator.
     {
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x44, 102, 7);
         e.submit(P);
         for (int i = 0; i < 3; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
@@ -104,7 +104,7 @@ int main() {
     // A4 — genuine quorum among forged padding: 4 genuine + 1 forged (k4). The 4
     //      genuine must finalize; the forged must NOT be in the cert.
     {
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x45, 103, 7);
         e.submit(P);
         for (int i = 0; i < 4; ++i) (void)e.record_vote(P.block_id, keys[i].pk, sign(keys[i], P));
@@ -119,7 +119,7 @@ int main() {
 
     // A5 — stake-refund exactness after MULTIPLE evictions in one quorum check.
     {
-        QuorumCertEngine e(set, 4);
+        QuorumCertEngine e(set);
         const VotePosition P = make_pos(0x46, 104, 7);
         e.submit(P);
         (void)e.record_vote(P.block_id, keys[0].pk, sign(keys[0], P));   // genuine
