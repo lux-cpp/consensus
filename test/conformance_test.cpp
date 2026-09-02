@@ -567,6 +567,33 @@ void weighted_decision() {
 
         QuorumCertEngine engine(vals);
         check(engine.total_stake() == u64(r, "total"), name + ": total stake matches Go");
+
+        // THE KEYLESS DENOMINATOR, conformed. A row states two numbers: what the
+        // chain CARRIES and what its signers hold. They differ exactly when the
+        // set contains a member with no key — a spectator that holds stake and can
+        // never cast a vote.
+        //
+        // This implementation cannot represent one: a Validator IS a public key
+        // here, and the engine's set is keyed by it, so a spectator has no slot to
+        // occupy and the corpus does not project one. That is why this harness
+        // needs no engine change to agree — the denominator it computes is the
+        // signer stake because it is the only stake it can see. The check is that
+        // Go arrived at the SAME number from a set that did contain the spectator:
+        // it excluded that weight rather than counting it, or the two would part
+        // company here by exactly `keyless`.
+        const std::uint64_t carried = u64(r, "carried");
+        const std::uint64_t keyless = u64(r, "keyless");
+        check(carried == u64(r, "total") + keyless,
+              name + ": carried stake is the signers' plus the keyless");
+        check(engine.total_stake() == carried - keyless,
+              name + ": the floor is read over the signers, not over what the chain carries");
+        if (keyless > 0) {
+            // And the case is worth having only if the other reading would have
+            // stranded it: two thirds of what the chain carries is out of reach of
+            // every signer in the set combined.
+            check(engine.total_stake() <= two_thirds_stake_floor(carried),
+                  name + ": the keyless row does not reproduce a stranded export");
+        }
         check(engine.stake_floor(tier) == u64(r, "stake_floor"),
               name + ": the " + rung + " stake floor matches Go");
         // And the floor the ENGINE derives is the one the corpus recorded — so the

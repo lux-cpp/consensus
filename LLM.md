@@ -34,7 +34,7 @@ Neither half of a rung is sufficient alone.
 alpha)`, `kConsensusSuperMajority` = 0.69) — a different quantity that shares a
 letter and nothing else.
 
-Fail-closed: zero total stake, an unknown block, an unknown tier, an empty set, or
+Fail-closed: zero signer stake, an unknown block, an unknown tier, an empty set, or
 an unresolved validator count never finalize. There is **no** force-accept, no
 `k==1`, no count-only path. A cert cannot forge its tier upward — the verifier
 re-derives both floors from the live validator set instead of reading the cert's own
@@ -344,7 +344,13 @@ engine. Missing, and known missing:
 - **The PQ legs.** No ML-DSA / SLH-DSA / Ringtail. Go `protocol/quasar` is 15k
   lines of them.
 - **A StakeSource.** The validator set is frozen at engine construction; Go reads
-  stake and pubkeys at the block's P-chain epoch height.
+  stake and pubkeys at the block's P-chain epoch height. Note what is NOT missing:
+  a `Validator` here IS a public key and the engine's set is keyed by one, so a
+  member the chain carries without a key has no slot to occupy and `total_stake_`
+  is the SIGNER stake by construction. That is the denominator Go and Rust now
+  read too, and `conformance_test` conforms it directly — the `quasar_keyless_third`
+  row states both what the chain carries and what its signers hold, and checks this
+  engine reached the smaller number.
 - **The sampling round-trip.** `photon` samples and `wave` tallies, but no
   query/chit exchange runs on the wire; the embedder drives the tally.
 - **Cert identity.** The cert keys voters by 48-byte BLS pubkey; Go keys by
