@@ -40,10 +40,30 @@ func decisions() []map[string]any {
 
 	rows := make([]map[string]any, 0, len(v.Finality))
 	for _, c := range v.Finality {
+		// ONLY THE SEATS THAT CAN SIGN are projected. A C++ validator IS a public
+		// key — QuorumCertEngine keys its set by one — so a member the chain
+		// carries without a key is not a thing that implementation can represent,
+		// and handing it one would be asking it to model a seat it has no slot
+		// for. The projection is faithful precisely because it drops them: the set
+		// C++ receives is the set every floor is read against in all three
+		// implementations, and `total` below is its stake.
+		//
+		// What the chain carries is recorded beside it rather than lost, so the
+		// keyless case still states its own point — that the denominator is the
+		// smaller of the two numbers, and deliberately.
 		var nodes, weights, signers []byte
+		var carried, keyless uint64
+		var n int
 		for _, s := range c.Set {
+			w := decimal(s.Weight)
+			carried += w
+			if s.Keyless {
+				keyless += w
+				continue
+			}
+			n++
 			nodes = append(nodes, unhexed(s.NodeID)...)
-			weights = binary.BigEndian.AppendUint64(weights, decimal(s.Weight))
+			weights = binary.BigEndian.AppendUint64(weights, w)
 		}
 		for _, id := range c.Signers {
 			signers = append(signers, unhexed(id)...)
@@ -58,12 +78,19 @@ func decisions() []map[string]any {
 			"name":         c.Name,
 			"rung":         c.Rung,
 			"epoch":        v.Epoch,
-			"set_size":     len(c.Set),
+			"set_size":     n,
 			"nodes":        hex.EncodeToString(nodes),
 			"weights":      hex.EncodeToString(weights),
 			"signers":      hex.EncodeToString(signers),
 			"signer_count": len(c.Signers),
 			"total":        c.Total,
+			"carried":      strconv.FormatUint(carried, 10),
+			"keyless":      strconv.FormatUint(keyless, 10),
+			// The membership roll's SIZE, beside its stake. set_size is the signer
+			// count and this is what the chain carries, so a row states both
+			// denominators in both units — and a runner can check that the roll
+			// reading would have refused the row, in seats as well as in stake.
+			"roll":         len(c.Set),
 			"voted":        c.Voted,
 			"signer_floor": c.SignerFloor,
 			"stake_floor":  c.StakeFloor,

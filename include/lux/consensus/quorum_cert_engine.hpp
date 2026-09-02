@@ -15,6 +15,13 @@
 //                                stake  > half_stake_floor(total)
 //     Quasar (export)          — voters ≥ two_thirds_count(n)
 //                                stake  > two_thirds_stake_floor(total)
+//                                n      ≥ kMinBFTCommittee
+//
+//   The export rung carries a third floor and it is read against the SET, not
+//   against the votes: f = (n-1)/3 is 0 below four signers, so a two-thirds
+//   supermajority over such a set tolerates no Byzantine fault and one compromised
+//   key forges the certificate. Neither quorum floor catches it — both are read
+//   over n and both shrink with it, and two_thirds_count(1) is 1.
 //
 //   BOTH floors of a rung are derived from the live set. Neither is configured,
 //   because a distinct-voter floor an operator can set is a security parameter
@@ -195,9 +202,20 @@ public:
     // from that set — nova_signer_floor(n) and two_thirds_count(n) — so there is no
     // quorum parameter to configure and none to get wrong. Fail loud at the system
     // boundary (throws std::invalid_argument) on a set that cannot be weighed:
-    // empty, a duplicate pubkey, an in-set validator with 0 stake, or a total that
-    // does not fit. floor(2n/3)+1 ≤ n for every n ≥ 1, so the export quorum is
-    // reachable on any set that constructs.
+    // empty, a duplicate pubkey, an in-set validator with 0 stake, a public key
+    // that is not a point of G1, or a total that does not fit.
+    //
+    // The key clause is what makes "a validator IS a signer" true here. A PubKey
+    // is an array, so it is always present and presence proves nothing: 48 zero
+    // bytes construct. Such a seat would hold stake in every denominator and never
+    // produce a signature this engine accepts — the spectator Go and Rust carry
+    // explicitly and this implementation refuses outright. It is refused HERE
+    // rather than tolerated silently, so the set's stake is the SIGNER stake by
+    // enforcement.
+    //
+    // floor(2n/3)+1 ≤ n for every n ≥ 1, so the export quorum is reachable on any
+    // set that constructs — though a set below kMinBFTCommittee is refused the
+    // export TIER by committee_floor, whatever its quorum reaches.
     explicit QuorumCertEngine(std::vector<Validator> validators);
 
     // Register a pending block to collect votes for. Returns false if a block with
@@ -216,11 +234,11 @@ public:
                                          const PubKey& voter,
                                          const Signature& sig);
 
-    // THE GATE. true IFF (total_stake>0) AND a BLS check covering every counted
-    // voter has passed AND (distinct voters ≥ the tier's signer floor) AND
-    // (summed stake > the tier's stake floor). Both floors, always: neither half
-    // is sufficient alone. No force-accept, no k==1, no count-only path;
-    // fail-closed on a missing block or zero total stake.
+    // THE GATE. true IFF (total_stake>0) AND (n ≥ the tier's committee floor) AND
+    // a BLS check covering every counted voter has passed AND (distinct voters ≥
+    // the tier's signer floor) AND (summed stake > the tier's stake floor). All
+    // three, always: no one of them is sufficient. No force-accept, no k==1, no
+    // count-only path; fail-closed on a missing block or zero total stake.
     [[nodiscard]] bool is_final(const BlockId& block_id, Tier tier = Tier::Quasar) const;
 
     // Assemble the portable witness for a block final AT `tier` (else nullopt).
@@ -250,6 +268,12 @@ public:
     [[nodiscard]] std::uint32_t signer_floor(Tier tier) const noexcept;
     // The stake a tally must STRICTLY exceed for a tier under this set.
     [[nodiscard]] std::uint64_t stake_floor(Tier tier) const noexcept;
+    // The smallest SET the tier will certify over at all — a floor on n rather
+    // than on the votes, and not implied by either floor above. Quasar (export)
+    // floors at kMinBFTCommittee because f = (n-1)/3 is 0 below it and a
+    // supermajority with no fault budget is not a Byzantine claim; Nova floors at
+    // one. Static: it is a property of the tier, not of this set.
+    [[nodiscard]] static std::uint32_t committee_floor(Tier tier) noexcept;
     [[nodiscard]] std::size_t   distinct_voters(const BlockId& block_id) const;
     [[nodiscard]] std::uint64_t voted_stake(const BlockId& block_id) const;
 
