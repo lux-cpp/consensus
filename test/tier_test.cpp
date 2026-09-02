@@ -26,6 +26,13 @@
 //      holding a stake majority must not self-ignite Nova on its own signature,
 //      and one holding two thirds must not export on it either.
 //   5. Fail-closed everywhere a floor cannot be asserted.
+//   6. The export rung has a THIRD floor, read against the set rather than the
+//      votes: below kMinBFTCommittee signers f = (n-1)/3 is 0, so a unanimous
+//      certificate carrying every unit of stake tolerates no Byzantine fault.
+//      Neither floor above catches it — both shrink with n.
+//   7. A validator IS a signer, enforced: a PubKey is an array and is therefore
+//      always present, so the constructor decodes it. A seat holding 48 bytes
+//      that are not a point would sit in every denominator and never sign.
 
 #include "lux/consensus/bls.hpp"
 #include "lux/consensus/quorum_cert_engine.hpp"
@@ -35,6 +42,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -259,6 +267,116 @@ int main() {
               "four distinct signers carrying four of 104");
         check(!e.is_final(P.block_id, Tier::Quasar),
               "the count floor is met and the stake floor is not — refused");
+    }
+
+    // ── [8] the export rung's floor on the SET ─────────────────────────────
+    // A supermajority is a claim about a fault budget: f = (n-1)/3 validators may
+    // be arbitrarily malicious and the rest still agree on one history. Below four
+    // signers that budget is ZERO, so a unanimous certificate carrying every unit
+    // of stake tolerates nothing and one compromised key among its signers forges
+    // it outright.
+    //
+    // Neither floor above catches it, and that is why it is a separate clause:
+    // both are read over n and both shrink with it. At n=1, two_thirds_count(1) is
+    // one signature and floor(2·w/3) is two thirds of that signer's own stake, so
+    // the rung's whole rule is satisfied by the party it is supposed to constrain.
+    std::printf("\n[8] the export rung refuses a set with no Byzantine fault budget\n");
+    for (std::uint32_t n = 1; n < kMinBFTCommittee; ++n) {
+        std::vector<Validator> set;
+        for (std::uint32_t i = 0; i < n; ++i) set.push_back({keys[i].pk, 100});
+        QuorumCertEngine e(set);
+
+        const VotePosition P = make_pos(std::uint8_t(0x80 + n), 30 + n);
+        e.submit(P);
+        for (std::uint32_t i = 0; i < n; ++i)
+            (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
+
+        const std::string at = " (n=" + std::to_string(n) + ")";
+        // Both quorum floors are MET, so neither can be what refuses it.
+        check(e.distinct_voters(P.block_id) >= e.signer_floor(Tier::Quasar),
+              "unanimity meets the export count floor" + at);
+        check(e.voted_stake(P.block_id) > e.stake_floor(Tier::Quasar),
+              "unanimity clears the export stake floor" + at);
+        check(!e.is_final(P.block_id, Tier::Quasar),
+              "and the export rung refuses it anyway" + at);
+        // Nova is untouched: it authorizes only local execution the chain can
+        // still reorg away, and a small chain has to be able to make progress.
+        check(e.is_final(P.block_id, Tier::Nova), "Nova still ignites" + at);
+        // The floor is stated as itself, not smuggled into the voter floor.
+        check(e.committee_floor(Tier::Quasar) == kMinBFTCommittee &&
+                  e.committee_floor(Tier::Nova) == 1,
+              "the committee floor is the export rung's alone" + at);
+        // And the same set cannot get its certificate in through the other door.
+        std::vector<Validator> wider;
+        for (std::uint32_t i = 0; i < kMinBFTCommittee; ++i) wider.push_back({keys[i].pk, 100});
+        QuorumCertEngine big(wider);
+        const VotePosition W = make_pos(std::uint8_t(0x90 + n), 40 + n);
+        big.submit(W);
+        for (std::uint32_t i = 0; i < n; ++i)
+            (void)big.record_vote(W.block_id, keys[i].pk, sign_vote(keys[i], W));
+        QuorumCert forged{};
+        forged.version     = kQuorumCertVersion;
+        forged.type        = kQCFinality;
+        forged.tier        = Tier::Quasar;
+        forged.position    = P;
+        forged.threshold   = e.signer_floor(Tier::Quasar);
+        for (std::uint32_t i = 0; i < n; ++i) forged.voters.push_back(keys[i].pk);
+        check(!e.verify_cert(forged), "and verify_cert refuses it at the same floor" + at);
+    }
+
+    // At the floor the same shape carries: this is a floor on the set, not a ban
+    // on small chains certifying anything.
+    {
+        std::vector<Validator> set;
+        for (std::uint32_t i = 0; i < kMinBFTCommittee; ++i) set.push_back({keys[i].pk, 100});
+        QuorumCertEngine e(set);
+        const VotePosition P = make_pos(0x8F, 39);
+        e.submit(P);
+        for (std::uint32_t i = 0; i < kMinBFTCommittee; ++i)
+            (void)e.record_vote(P.block_id, keys[i].pk, sign_vote(keys[i], P));
+        check(e.is_final(P.block_id, Tier::Quasar),
+              "the minimum Byzantine committee exports");
+        const auto cert = e.assemble_cert(P.block_id, Tier::Quasar);
+        check(cert.has_value() && e.verify_cert(*cert), "and its certificate re-verifies");
+    }
+
+    // ── [9] a validator IS a signer, enforced at construction ───────────────
+    // A PubKey is an array: it is always present, and presence proves nothing.
+    // Forty-eight zero bytes are a well-formed value and not a point of G1, so
+    // such a seat would hold stake in every denominator and never produce a
+    // signature this engine accepts — the spectator Go and Rust carry explicitly
+    // and this implementation must refuse rather than strand.
+    std::printf("\n[9] a seat whose key is not a point is refused at construction\n");
+    {
+        const PubKey dead{};  // 48 zero bytes: present, well-formed, not a point
+        check(!bls::key_validate(dead.data()), "the identity-shaped key does not validate");
+        bool threw = false;
+        try {
+            std::vector<Validator> set;
+            for (std::size_t i = 0; i < 3; ++i) set.push_back({keys[i].pk, 100});
+            set.push_back({dead, 100});
+            QuorumCertEngine e(set);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        check(threw, "a set carrying a dead key does not construct");
+
+        // A key that is the right width and simply is not on the curve, and one
+        // that is a real point spelled non-canonically, are refused for the same
+        // reason at the same door.
+        PubKey garbage{};
+        garbage.fill(0xAB);
+        check(!bls::key_validate(garbage.data()), "a shaped non-point does not validate");
+        threw = false;
+        try {
+            QuorumCertEngine e(std::vector<Validator>{{keys[0].pk, 100}, {garbage, 100}});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        check(threw, "and a set carrying it does not construct either");
+
+        // The clause does not touch a set of real keys.
+        check(bls::key_validate(keys[0].pk.data()), "a real validator key validates");
     }
 
     std::printf("\n--------------------------------------------------------------------------------\n");
