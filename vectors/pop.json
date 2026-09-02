@@ -104,6 +104,14 @@
       "error": "pop: public key is not a canonical compressed BLS12-381 G1 point"
     },
     {
+      "name": "long key: 49 bytes",
+      "node": "1111111111111111111111111111111111111111",
+      "key": "95a254501b7733239ed3cec4d56737977bd09ede881d8a234560e83e5525017add3b1dcc3eabfb85e12a4131b19c253bab",
+      "proof": "b93ce2cb351e91a3e651619a9559ec582ae036a1d450e9e567c9810a9da755a5d2e58ae97ff71a7b3a3f59b354151b8c14ec3d9f915691326100c63d3c74d7669d30b6a6386ec6f538973ef362d1923c954cdc066c8b44072ae22bb3bfd690da",
+      "accepted": false,
+      "error": "pop: public key is not a canonical compressed BLS12-381 G1 point"
+    },
+    {
       "name": "non-canonical key: on-curve point outside the prime-order subgroup",
       "node": "1111111111111111111111111111111111111111",
       "key": "800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004",
