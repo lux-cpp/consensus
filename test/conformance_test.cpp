@@ -564,8 +564,21 @@ private:
 void weighted_decision() {
     banner("weighted decision — the signer floor and the stake floor over a live set");
 
+    // The corpus is the ORACLE, so an empty or shortened one is a conformance run
+    // that asks nothing and reports PASS — the loop below simply does not execute.
+    // The three derived-authority rows were added by regenerating this file, and a
+    // regeneration that dropped them would have been indistinguishable from one that
+    // kept them. So the count is stated here, where dropping a row is a failure and
+    // adding one is a deliberate edit to this line.
+    const std::vector<Row> rows = load("decision.json");
+    if (rows.empty()) die("decision.json is empty — the weighted oracle asks nothing");
+    if (rows.size() != 18)
+        die("decision.json holds " + std::to_string(rows.size()) + " rows, expected 18 — "
+            "regenerate the corpus against the Go it is the oracle for, then state the "
+            "new count here");
+
     std::size_t accepted = 0, refused = 0;
-    for (const Row& r : load("decision.json")) {
+    for (const Row& r : rows) {
         const std::string name = field(r, "name");
         const std::string rung = field(r, "rung");
         if (rung != "nova" && rung != "quasar")

@@ -42,7 +42,13 @@ not one rule. Both certificate types read one floor, the free function
 `threshold == signer_floor(tier, n)` exactly — equality, not a lower bound, in both
 directions. `vectors/decision.json` carries the declaration beside the derived floor
 so the two can be checked against each other, and three of its eighteen rows declare
-something else on purpose. The LOCAL gate (`is_final`) is handed no certificate and
+something else on purpose. The runner states that eighteen and dies on any other
+count: the corpus is the ORACLE, so an empty or shortened one is a run that asks
+nothing and reports PASS — the loop simply does not execute — and a regeneration
+that dropped those three rows would have been indistinguishable from one that kept
+them. Regenerate against the Go checkout the corpus is the oracle FOR (a `go.work`
+override, not the `replace` in `scripts/oracle/go.mod`, which points at whatever is
+checked out beside this repo), then state the new count. The LOCAL gate (`is_final`) is handed no certificate and
 therefore no declaration, so it accepts those three: two objects, two questions.
 Nova
 floors at one: it authorizes only local execution the chain can reorg away, and a
