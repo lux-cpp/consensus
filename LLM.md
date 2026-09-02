@@ -296,8 +296,41 @@ is the loader, not the code. Run the suite with randomization off:
 
 Tests live in ONE list in `CMakeLists.txt` (`CONSENSUS_TESTS`). A new test is one
 line there: source `test/<name>_test.cpp`, target `<name>_test`, ctest name
-`<name>`. The sanitizer block reads the same list, so a test can never be
-instrumented in one place and forgotten in another.
+`<name>`. The sanitizer and coverage blocks read the same list through
+`CONSENSUS_OWN_TARGETS`, so a test can never be instrumented in one place and
+forgotten in another.
+
+## Coverage
+
+```
+cmake -S . -B build-cov -DLUXCPP_ROOT=/path/to/luxcpp -DCMAKE_BUILD_TYPE=Debug \
+      -DCONSENSUS_COVERAGE=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build-cov --target coverage        # the report
+cmake --build build-cov --target coverage-show   # the same profile, per line, as HTML
+```
+
+Clang's source-based coverage, and a build with any other compiler says so rather
+than measuring nothing. Two reasons for it over gcov. It counts REGIONS, so a line
+carrying two clauses reports both and a half-tested predicate cannot read as
+covered — the only measure worth quoting about a gate whose clauses ARE the rule.
+And it is the same instrumentation `cargo llvm-cov` reports the Rust crate with,
+so the C++ number and the Rust number mean one thing.
+
+Scoped like the sanitizers: blst and bls_signature stay clean. The report is read
+from the test binaries and filtered back to `src/` and `include/`, because
+llvm-cov cannot open a static archive and an archive's members alone lose the
+header inline functions. llvm-cov warns that some functions have mismatched data —
+the per-test `main`s, one per binary under one name; they are in `test/`, which
+the filter drops.
+
+The gate stands at 99.08% of regions and 100% of functions. The remaining eight
+are defensive arms behind walls that already hold: a pairing failure over points
+both callers decoded, aggregation over signatures each already verified, a
+canonical round trip blst refuses on the way in, an uncompress after `pop_verify`
+decoded the same bytes, `total_stake_ == 0` after a constructor that refuses an
+empty set and every zero-stake member, and two `return "unknown"` arms after
+switches covering every enumerator. Go and Rust carry the same walls in the same
+places and their coverage stops at the same lines.
 
 ## The Go corpus
 
