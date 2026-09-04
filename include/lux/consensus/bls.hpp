@@ -56,6 +56,16 @@ int aggregate_sigs(const std::uint8_t* sigs, std::size_t n, std::uint8_t agg_sig
 // Domain-bound (hash-to-curve under kVoteDST): the Lux consensus vote domain.
 int sign(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len,
          std::uint8_t sig[96]) noexcept;
+
+// Domain-bound under kPopDST — the signing counterpart to `pop_verify` below,
+// and the general proof-of-possession primitive: the CALLER decides what
+// message a proof binds (a genesis signer block proves possession over
+// node‖pubkey; a peer link's signed-IP field proves possession over the
+// connection's own IP‖port‖timestamp — different messages, same ciphersuite).
+// Both `sign` and `pop_sign` hash to the curve; only the domain tag differs,
+// which is the whole point of naming it rather than parameterizing it.
+int pop_sign(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len,
+             std::uint8_t sig[96]) noexcept;
 // The pairing itself, over points already decompressed and already group-checked.
 // ONE definition: the byte-oriented verify below and every caller that already
 // holds decompressed points (a validator set, an aggregate) go through here, so

@@ -50,18 +50,28 @@ int aggregate_sigs(const std::uint8_t* sigs, std::size_t n, std::uint8_t agg_sig
     return cevm::crypto::bls::aggregate_sigs(sigs, n, agg_sig);
 }
 
-int sign(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len,
-         std::uint8_t sig[96]) noexcept {
+// The one hash-to-curve-and-sign body. `sign` and `pop_sign` differ ONLY in
+// which domain tag they pass here — the shared primitive both named
+// ciphersuites are thin wrappers over, so there is exactly one place that
+// decides how a signature is produced (mirrors `pair` being the one place a
+// signature is checked).
+int sign_under(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len,
+               const std::uint8_t* d, std::size_t d_len, std::uint8_t sig[96]) noexcept {
     if (sk == nullptr || sig == nullptr) return -1;
     if (msg == nullptr && msg_len != 0) return -1;
     blst_scalar s;
     if (!load_sk(s, sk)) return -1;
     blst_p2 hash_jac;
-    blst_hash_to_g2(&hash_jac, msg, msg_len, dst(), kVoteDSTLen, /*aug=*/nullptr, /*aug_len=*/0);
+    blst_hash_to_g2(&hash_jac, msg, msg_len, d, d_len, /*aug=*/nullptr, /*aug_len=*/0);
     blst_p2 sig_jac;
     blst_sign_pk_in_g1(&sig_jac, &hash_jac, &s);
     blst_p2_compress(sig, &sig_jac);
     return 0;
+}
+
+int sign(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len,
+         std::uint8_t sig[96]) noexcept {
+    return sign_under(sk, msg, msg_len, dst(), kVoteDSTLen, sig);
 }
 
 bool pair(const blst_p1_affine& pk, const blst_p2_affine& sig,
@@ -150,6 +160,10 @@ std::optional<blst_p1_affine> decode_key(const std::uint8_t pk[48]) noexcept {
 
 bool key_validate(const std::uint8_t pk[48]) noexcept { return decode_key(pk).has_value(); }
 
+int pop_sign(const std::uint8_t sk[32], const std::uint8_t* msg, std::size_t msg_len,
+             std::uint8_t sig[96]) noexcept {
+    return sign_under(sk, msg, msg_len, reinterpret_cast<const std::uint8_t*>(kPopDST), kPopDSTLen, sig);
+}
 Pop pop_verify(const std::uint8_t node[20], const std::uint8_t pk[48],
                const std::uint8_t proof[96]) noexcept {
     if (node == nullptr || proof == nullptr) return Pop::Key;
