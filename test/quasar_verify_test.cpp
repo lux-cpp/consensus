@@ -10,6 +10,7 @@
 #include "lux/quasar.h"
 #include "lux/quasar.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
