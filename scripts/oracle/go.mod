@@ -1,6 +1,6 @@
 module github.com/luxcpp/consensus/oracle
 
-go 1.26.8
+go 1.27.1
 
 require (
 	github.com/luxfi/consensus v1.36.88
@@ -103,7 +103,7 @@ require (
 	github.com/luxfi/utils v1.3.1 // indirect
 	github.com/luxfi/validators v1.3.1 // indirect
 	github.com/luxfi/version v1.0.1 // indirect
-	github.com/luxfi/vm v1.3.12 // indirect
+	github.com/luxfi/vm v1.3.16 // indirect
 	github.com/luxfi/warp v1.24.1 // indirect
 	github.com/luxfi/zap v1.2.6 // indirect
 	github.com/luxfi/zapdb v1.10.6 // indirect

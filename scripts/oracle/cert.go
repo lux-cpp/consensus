@@ -12,14 +12,14 @@
 //
 // TWO FILES, because they pin two different things:
 //
-//   cert_wire.json    the LAYOUT. Every field at its offset, and the bytes that
-//                     result. Signatures are recognizable filler, not real: a
-//                     codec is checked by round-trip, and paying for BLS to
-//                     check a byte offset would only make the corpus slower.
-//   cert_verify.json  the PREDICATE. Real committees, real signatures, and one
-//                     row per clause of Verify — including the clauses that
-//                     REFUSE, which is where an implementation that "agrees"
-//                     usually turns out not to.
+//	cert_wire.json    the LAYOUT. Every field at its offset, and the bytes that
+//	                  result. Signatures are recognizable filler, not real: a
+//	                  codec is checked by round-trip, and paying for BLS to
+//	                  check a byte offset would only make the corpus slower.
+//	cert_verify.json  the PREDICATE. Real committees, real signatures, and one
+//	                  row per clause of Verify — including the clauses that
+//	                  REFUSE, which is where an implementation that "agrees"
+//	                  usually turns out not to.
 package main
 
 import (
@@ -171,7 +171,7 @@ func signedCert(n int, threshold uint32, tier chain.Finality) *chain.QuorumCert 
 	pos := certPosition()
 	msg := chain.CanonicalVoteMessage(pos)
 	votes := make([]chain.SignedVote, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		sk := certKey(i)
 		votes = append(votes, chain.SignedVote{
 			NodeID:    node(i),
@@ -202,7 +202,7 @@ func (r registry) VerifyVote(n ids.NodeID, msg, sig []byte, _ uint64) bool {
 
 func registryFor(n int) registry {
 	r := make(registry, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		r[node(i)] = bls.PublicFromSecretKey(certKey(i))
 	}
 	return r
@@ -245,7 +245,7 @@ func verdict(err error) string {
 func verifyRow(name string, c *chain.QuorumCert, n int, wire []byte) map[string]any {
 	pks := make([]byte, 0, n*48)
 	nodes := make([]byte, 0, n*20)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		pk := bls.PublicKeyToCompressedBytes(bls.PublicFromSecretKey(certKey(i)))
 		pks = append(pks, pk...)
 		id := node(i)

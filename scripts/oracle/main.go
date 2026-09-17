@@ -148,7 +148,7 @@ func voteSignatures() []map[string]any {
 	msg := chain.CanonicalVoteMessage(pos)
 
 	rows := make([]map[string]any, 0, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		raw := make([]byte, 32)
 		for j := range raw {
 			raw[j] = byte(0xA5 ^ (i*31 + j))
