@@ -7,3 +7,8 @@ proofs/*.out
 proofs/*.pdf
 .DS_Store
 compile_commands.json
+
+# Local symlinks to LLM.md
+CLAUDE.md
+AGENTS.md
+GEMINI.md
